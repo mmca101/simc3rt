@@ -3672,22 +3672,24 @@ async function loadQuestions(){
   sheetReloadBtn.disabled = true;
   startBtn.classList.add('btn-not-ready');
   try{
-    // Previously always forced &gid=0 (the first sheet's ID at creation
-    // time) — but gids don't shift when tabs are reordered, so a sheet
-    // whose original first tab was ever deleted/recreated has no gid=0 at
-    // all, and Google's export endpoint 400s on a gid that doesn't exist.
-    // That's indistinguishable from a real problem by status code alone,
-    // but it has nothing to do with sharing — reported "400 despite
-    // correct sharing settings" cases are consistent with exactly this.
-    // Omitting gid entirely makes Google export whichever tab is actually
-    // first, regardless of its real gid; a gid explicitly present in the
-    // pasted URL (e.g. copied while viewing a specific tab) is tried
-    // first since that's a deliberate choice, but falls back the same way
-    // if that specific tab no longer exists either.
-    const requestedGid = extractSheetGid(rawValue);
+    // gid=0 is tried FIRST, same as it always was — most sharing links
+    // (copied via the "Freigeben" button) carry no gid fragment at all, so
+    // defaulting straight to "whichever tab is positionally first" (as an
+    // earlier version of this fix did) silently loads the wrong tab for
+    // anyone whose actual question tab isn't leftmost — e.g. a sheet with
+    // a notes/instructions tab placed before the real data — even though
+    // gid=0 itself was perfectly fine. That regressed Lerngedächtnis for
+    // exactly that shape of sheet. An explicit gid in the pasted URL
+    // (copied while viewing a specific tab) still takes priority over the
+    // gid=0 default. Only once the primary attempt genuinely fails (the
+    // original bug: gid=0 doesn't exist because that tab was deleted at
+    // some point) does this fall back to no gid at all, i.e. whatever tab
+    // is actually first — better than nothing, but a last resort now
+    // rather than the default.
+    const requestedGid = extractSheetGid(rawValue) || '0';
     const buildUrl = gid => `https://docs.google.com/spreadsheets/d/${id}/export?format=csv` + (gid ? `&gid=${gid}` : '');
     let res = await fetch(buildUrl(requestedGid));
-    if(!res.ok && requestedGid){
+    if(!res.ok){
       res = await fetch(buildUrl(null));
     }
     if(!res.ok) throw new Error('HTTP ' + res.status);
