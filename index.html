@@ -916,9 +916,16 @@ const GEMINI_FALLBACK_MODEL = 'gemini-flash-lite-latest';
 // (manual self-grade buttons for grading, plain-text rendering for the
 // Musterlösung reformat) rather than compounding into a 3-retry-plus-
 // fallback-model cascade that could take a minute or more to give up.
-const GEMINI_TIMEOUT_MS = 15000;
+// Two different budgets rather than one shared constant: during the exam
+// itself (Übungs-Modus reveal) a slow response blocks the student from
+// moving on, so it gives up comparatively quickly; on the results page the
+// student is just waiting for a grade/report to fill in passively (or
+// running a whole-exam bulk grade), so it's worth waiting much longer
+// before assuming the connection itself is the problem.
+const GEMINI_TIMEOUT_EXAM_MS = 60000;
+const GEMINI_TIMEOUT_RESULTS_MS = 300000;
 
-async function callGeminiOnce(prompt, model){
+async function callGeminiOnce(prompt, model, timeoutMs){
   const apiKey = getAiKey();
   if(!apiKey) throw new Error('Kein API-Key hinterlegt.');
   let res;
@@ -929,12 +936,12 @@ async function callGeminiOnce(prompt, model){
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({contents: [{parts: [{text: prompt}]}]}),
-        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS)
+        signal: AbortSignal.timeout(timeoutMs)
       }
     );
   } catch(err){
     if(err.name === 'TimeoutError' || err.name === 'AbortError'){
-      const timeoutErr = new Error('Zeitüberschreitung — keine Antwort innerhalb von ' + (GEMINI_TIMEOUT_MS/1000) + 's.');
+      const timeoutErr = new Error('Zeitüberschreitung — keine Antwort innerhalb von ' + (timeoutMs/1000) + 's.');
       timeoutErr.isTimeout = true;
       throw timeoutErr;
     }
@@ -957,11 +964,11 @@ async function callGeminiOnce(prompt, model){
     data.candidates[0].content.parts[0].text) || '';
 }
 
-async function callGeminiApi(prompt){
+async function callGeminiApi(prompt, timeoutMs){
   let lastErr;
   for(let attempt = 1; attempt <= 3; attempt++){
     try{
-      return await callGeminiOnce(prompt, GEMINI_PRIMARY_MODEL);
+      return await callGeminiOnce(prompt, GEMINI_PRIMARY_MODEL, timeoutMs);
     } catch(err){
       lastErr = err;
       // A timeout won't fix itself by asking the SAME model again — skip
@@ -981,7 +988,7 @@ async function callGeminiApi(prompt){
   // grading" instead of assuming the first timeout already meant that.
   if(GEMINI_RETRYABLE_STATUS.has(lastErr.status) || lastErr.isTimeout){
     try{
-      return await callGeminiOnce(prompt, GEMINI_FALLBACK_MODEL);
+      return await callGeminiOnce(prompt, GEMINI_FALLBACK_MODEL, timeoutMs);
     } catch(fallbackErr){
       throw lastErr; // report the primary model's error — the more relevant one
     }
@@ -989,15 +996,15 @@ async function callGeminiApi(prompt){
   throw lastErr;
 }
 
-async function aiReformatAnswer(rawText){
+async function aiReformatAnswer(rawText, timeoutMs){
   const prompt = 'Formatiere den folgenden Text als gut lesbares Markdown (fett für Kernbegriffe, ' +
     'Aufzählungen wo sinnvoll, kurze Absätze). Verändere NICHT den Inhalt, füge NICHTS hinzu und lasse ' +
     'NICHTS weg — nur Formatierung und Struktur dürfen sich ändern. Antworte AUSSCHLIESSLICH mit dem ' +
     'formatierten Text, ohne Einleitung, ohne Codeblock, ohne umschließende Anführungszeichen.\n\nText:\n' + rawText;
-  const text = await callGeminiApi(prompt);
+  const text = await callGeminiApi(prompt, timeoutMs);
   return text.replace(/```(markdown)?/gi, '').trim();
 }
-function scheduleReformat(rawText, targetEl){
+function scheduleReformat(rawText, targetEl, timeoutMs){
   if(!rawText || !getAiKey()) return;
   const cached = getCachedReformat(rawText);
   if(cached){ targetEl.innerHTML = renderMarkdownSafe(cached); return; }
@@ -1005,7 +1012,7 @@ function scheduleReformat(rawText, targetEl){
   // loading note first, instead of letting the raw rendering sit there and
   // then jump-cut to the reformatted version once the response lands.
   targetEl.innerHTML = '<span style="color:var(--muted)">Musterlösung lädt …</span>';
-  aiReformatAnswer(rawText).then(formatted => {
+  aiReformatAnswer(rawText, timeoutMs).then(formatted => {
     if(!formatted){ targetEl.innerHTML = renderMarkdownSafe(rawText); return; }
     setCachedReformat(rawText, formatted);
     targetEl.innerHTML = renderMarkdownSafe(formatted);
@@ -1016,7 +1023,7 @@ function scheduleReformat(rawText, targetEl){
 // model — it gets hot-swapped by Google over time (with advance notice for
 // breaking changes), so this doesn't need to be manually bumped every time
 // a specific dated model version (e.g. gemini-2.0-flash) gets retired.
-async function aiGradeOpenQuestion(q, candidateText){
+async function aiGradeOpenQuestion(q, candidateText, timeoutMs){
   const prompt = 'Du bist Prüfer/in für die GPM Basiszertifikat-Prüfung im Projektmanagement (ICB4).\n' +
     'Bewerte, ob die Antwort des Kandidaten inhaltlich der Musterantwort entspricht. Die Kernaussagen müssen ' +
     'stimmen, eine wortgleiche Formulierung ist nicht nötig. Sei bei der Bewertung fair, aber nicht nachlässig.\n\n' +
@@ -1026,7 +1033,7 @@ async function aiGradeOpenQuestion(q, candidateText){
     '\nAntwort des Kandidaten: ' + (candidateText || '(keine Antwort abgegeben)') +
     '\n\nAntworte AUSSCHLIESSLICH mit kompaktem JSON, ohne Markdown-Codeblock, in diesem Format:\n' +
     '{"correct": true oder false, "feedback": "ein bis zwei Sätze Begründung auf Deutsch"}';
-  const text = await callGeminiApi(prompt);
+  const text = await callGeminiApi(prompt, timeoutMs);
   const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
   let parsed;
   try{ parsed = JSON.parse(cleaned); }
@@ -2239,7 +2246,7 @@ function applyCheatMcColoring(q){
 // cache, so it's instant on a question you've already opened before.
 function triggerCheatReformat(q){
   const musterEl = document.querySelector('#cheat-result .musterantwort');
-  if(musterEl) scheduleReformat(q.answer, musterEl);
+  if(musterEl) scheduleReformat(q.answer, musterEl, GEMINI_TIMEOUT_EXAM_MS);
 }
 // Some sheet rows have "Ergänzende Informationen" that's just a copy of the
 // question (and, for MC, the options) rather than genuinely supplementary
@@ -2421,7 +2428,7 @@ function wireCheatAiBtn(q){
       const mySession = session;
       cheatAiBtn.disabled = true;
       cheatAiBtn.textContent = 'Wird bewertet…';
-      await runAiGradeQuestion(mySession, q);
+      await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_EXAM_MS);
       if(session !== mySession) return; // a new exam was started meanwhile
       reRenderCheatSlot(q);
       refreshCircleStates();
@@ -2459,7 +2466,7 @@ function maybeAutoGradeCheat(q){
   const fb = session.aiFeedback.get(q.id);
   if(fb && (fb.feedback || fb.error)) return;
   const mySession = session;
-  runAiGradeQuestion(mySession, q).then(()=>{
+  runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_EXAM_MS).then(()=>{
     if(session !== mySession) return; // a new exam was started meanwhile
     reRenderCheatSlot(q);
     refreshCircleStates();
@@ -3065,11 +3072,11 @@ function downloadAnswersCsv(){
 // sess is captured explicitly (not read from the closure) so that an in-flight
 // grading call started before "Neue Übung starten" can never write into a
 // session that has since been replaced by a fresh one.
-async function runAiGradeQuestion(sess, q){
+async function runAiGradeQuestion(sess, q, timeoutMs){
   try{
     const a = sess.answers.get(q.id);
     const candidateText = a && a.openHtml ? stripHtml(a.openHtml) : '';
-    const result = await aiGradeOpenQuestion(q, candidateText);
+    const result = await aiGradeOpenQuestion(q, candidateText, timeoutMs);
     sess.selfGrade.set(q.id, result.correct);
     recordQuestionMemory(q, {correct: result.correct});
     sess.aiFeedback.set(q.id, {feedback: result.feedback, error: null});
@@ -3115,7 +3122,7 @@ async function runBulkAiGrade(btn){
       const q = openQs[i];
       if(mySession.selfGrade.get(q.id) !== undefined) continue; // graded by something else in the meantime
       if(btn) btn.textContent = `Bewerte ${i+1}/${openQs.length}…`;
-      await runAiGradeQuestion(mySession, q);
+      await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_RESULTS_MS);
       if(i < openQs.length-1) await new Promise(r=>setTimeout(r, 250));
     }
   } finally {
@@ -3251,7 +3258,7 @@ function renderReviewItem(q, idx){
       mySession.aiGradingRunning = true;
       document.querySelectorAll('.ai-grade-btn').forEach(b=>{ b.disabled = true; b.textContent = '⏳ Bewertung läuft…'; });
       aiBtn.textContent = 'Wird bewertet…';
-      await runAiGradeQuestion(mySession, q);
+      await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_RESULTS_MS);
       mySession.aiGradingRunning = false;
       if(session !== mySession) return; // a new exam was started meanwhile
       const scr = document.getElementById('screen-results');
@@ -3268,7 +3275,7 @@ function renderReviewItem(q, idx){
     const triggerReformat = () => {
       if(reformatRequested || !detailsEl.open) return;
       reformatRequested = true;
-      scheduleReformat(q.answer, musterEl);
+      scheduleReformat(q.answer, musterEl, GEMINI_TIMEOUT_RESULTS_MS);
     };
     triggerReformat(); // covers items that render already open
     detailsEl.addEventListener('toggle', triggerReformat);
