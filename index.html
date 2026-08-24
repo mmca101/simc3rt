@@ -924,6 +924,10 @@ const GEMINI_FALLBACK_MODEL = 'gemini-flash-lite-latest';
 // before assuming the connection itself is the problem.
 const GEMINI_TIMEOUT_EXAM_MS = 60000;
 const GEMINI_TIMEOUT_RESULTS_MS = 300000;
+// Kill switch: flip to true to re-enable the timeout without re-threading
+// anything — every call site above already passes the right budget, this
+// just decides whether callGeminiOnce actually applies it to the fetch.
+const GEMINI_TIMEOUT_ENABLED = false;
 
 async function callGeminiOnce(prompt, model, timeoutMs){
   const apiKey = getAiKey();
@@ -936,7 +940,7 @@ async function callGeminiOnce(prompt, model, timeoutMs){
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({contents: [{parts: [{text: prompt}]}]}),
-        signal: AbortSignal.timeout(timeoutMs)
+        ...(GEMINI_TIMEOUT_ENABLED ? {signal: AbortSignal.timeout(timeoutMs)} : {})
       }
     );
   } catch(err){
