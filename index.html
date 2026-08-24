@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="SiM-C3RT">
-<title>SiM-C3RT v1.3</title>
+<title>SiM-C3RT v1.4</title>
 <!-- Link-sharing preview (Discord, WhatsApp, Slack, iMessage, etc.) — needs
      an absolute image URL, not a relative path, for external crawlers to
      resolve it correctly regardless of where the link was shared from. -->
@@ -398,6 +398,7 @@ input[type=range]{accent-color:var(--blue)}
 
   .workarea{padding:16px 14px 90px}
   #cheat-ai-btn{width:100%;text-align:center}
+  .self-grade-btns button{flex:1 1 0;text-align:center}
   .q-info-row{gap:8px;margin-bottom:14px}
   .q-info-box{min-width:0}
   .q-heading{padding-left:4px}
@@ -601,7 +602,7 @@ input[type=range]{accent-color:var(--blue)}
       </svg>
       <span>mmca101/simc3rt</span>
     </a>
-    <span class="version-badge">v1.3</span>
+    <span class="version-badge">v1.4</span>
   </div>
 </div>
 
@@ -613,7 +614,7 @@ input[type=range]{accent-color:var(--blue)}
         <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
       </svg>
     </button>
-    <span class="version-badge topbar-version">v1.3</span>
+    <span class="version-badge topbar-version">v1.4</span>
     <div class="brand">SiM-C3RT</div>
     <div class="timer" id="timer-display">90:00</div>
     <button class="end-btn" id="end-exam-btn">PRÜFUNG BEENDEN</button>
@@ -924,6 +925,10 @@ const GEMINI_FALLBACK_MODEL = 'gemini-flash-lite-latest';
 // before assuming the connection itself is the problem.
 const GEMINI_TIMEOUT_EXAM_MS = 60000;
 const GEMINI_TIMEOUT_RESULTS_MS = 300000;
+// Kill switch: flip to true to re-enable the timeout without re-threading
+// anything — every call site above already passes the right budget, this
+// just decides whether callGeminiOnce actually applies it to the fetch.
+const GEMINI_TIMEOUT_ENABLED = false;
 
 async function callGeminiOnce(prompt, model, timeoutMs){
   const apiKey = getAiKey();
@@ -936,7 +941,7 @@ async function callGeminiOnce(prompt, model, timeoutMs){
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({contents: [{parts: [{text: prompt}]}]}),
-        signal: AbortSignal.timeout(timeoutMs)
+        ...(GEMINI_TIMEOUT_ENABLED ? {signal: AbortSignal.timeout(timeoutMs)} : {})
       }
     );
   } catch(err){
@@ -964,9 +969,51 @@ async function callGeminiOnce(prompt, model, timeoutMs){
     data.candidates[0].content.parts[0].text) || '';
 }
 
-async function callGeminiApi(prompt, timeoutMs){
+// Ticks down a backoff wait in ~250ms steps (responsive to cancellation)
+// while reporting a human-readable countdown once per second via
+// opts.onStatus — a 12-108s silent wait otherwise looks indistinguishable
+// from being stuck. Resolves early the instant opts.cancelToken.cancelled
+// flips true, rather than always waiting out the full delay.
+function waitWithCountdown(delayMs, opts){
+  return new Promise(resolve => {
+    const start = Date.now();
+    const tick = () => {
+      if(opts && opts.cancelToken && opts.cancelToken.cancelled){ resolve(); return; }
+      const remaining = delayMs - (Date.now() - start);
+      if(remaining <= 0){ resolve(); return; }
+      if(opts && opts.onStatus) opts.onStatus('Erneuter Versuch in ' + Math.ceil(remaining/1000) + 's…');
+      setTimeout(tick, 250);
+    };
+    tick();
+  });
+}
+function throwIfCancelled(cancelToken){
+  if(cancelToken && cancelToken.cancelled){
+    const e = new Error('Manuell abgebrochen.');
+    e.isCancelled = true;
+    throw e;
+  }
+}
+// opts: {slowMode, onStatus, cancelToken} — all optional.
+// slowMode widens the 429/503 backoff (3x) — set once a 429 has already
+// been seen during this session's live exam, as a sign this key's quota is
+// genuinely under pressure rather than hitting one-off transient blips, so
+// a normal short backoff is more likely to just collide with the limit
+// again instead of clearing it.
+// Base backoff unit is deliberately generous (12s) — a 429/503 means the
+// primary model needs real time to recover, not a quick nudge, and jumping
+// to the fallback model too eagerly defeats the point of having a primary
+// model at all. Normal mode waits 12s then 24s (36s total) before falling
+// back; slowMode (see above) triples that to 36s/72s. cancelToken lets a
+// caller with a repurposed "cancel" button interrupt that wait immediately
+// instead of always sitting through the full delay.
+async function callGeminiApi(prompt, timeoutMs, opts){
+  const slowMode = opts && opts.slowMode;
+  const cancelToken = opts && opts.cancelToken;
+  const backoffMultiplier = slowMode ? 3 : 1;
   let lastErr;
   for(let attempt = 1; attempt <= 3; attempt++){
+    throwIfCancelled(cancelToken);
     try{
       return await callGeminiOnce(prompt, GEMINI_PRIMARY_MODEL, timeoutMs);
     } catch(err){
@@ -976,9 +1023,11 @@ async function callGeminiApi(prompt, timeoutMs){
       // more time on repeat attempts here.
       if(err.isTimeout) break;
       if(!GEMINI_RETRYABLE_STATUS.has(err.status) || attempt === 3) break;
-      await new Promise(r => setTimeout(r, attempt * 1200));
+      await waitWithCountdown(attempt * 12000 * backoffMultiplier, opts);
+      throwIfCancelled(cancelToken);
     }
   }
+  throwIfCancelled(cancelToken);
   // Primary model is still failing with a transient error (or timed out)
   // — one attempt on the free Lite tier before giving up entirely. A
   // timeout here too means BOTH models independently failed to respond in
@@ -990,18 +1039,24 @@ async function callGeminiApi(prompt, timeoutMs){
     try{
       return await callGeminiOnce(prompt, GEMINI_FALLBACK_MODEL, timeoutMs);
     } catch(fallbackErr){
-      throw lastErr; // report the primary model's error — the more relevant one
+      // Report the primary model's error (the more relevant one) but make
+      // clear the fallback was tried too and didn't help either — without
+      // this the message reads identically whether the fallback was ever
+      // attempted or not, which was the actual point of confusion.
+      lastErr.message += ' (Ausweich-Modell ebenfalls ohne Erfolg.)';
+      lastErr.fallbackAlsoFailed = true;
+      throw lastErr;
     }
   }
   throw lastErr;
 }
 
-async function aiReformatAnswer(rawText, timeoutMs){
+async function aiReformatAnswer(rawText, timeoutMs, opts){
   const prompt = 'Formatiere den folgenden Text als gut lesbares Markdown (fett für Kernbegriffe, ' +
     'Aufzählungen wo sinnvoll, kurze Absätze). Verändere NICHT den Inhalt, füge NICHTS hinzu und lasse ' +
     'NICHTS weg — nur Formatierung und Struktur dürfen sich ändern. Antworte AUSSCHLIESSLICH mit dem ' +
     'formatierten Text, ohne Einleitung, ohne Codeblock, ohne umschließende Anführungszeichen.\n\nText:\n' + rawText;
-  const text = await callGeminiApi(prompt, timeoutMs);
+  const text = await callGeminiApi(prompt, timeoutMs, opts);
   return text.replace(/```(markdown)?/gi, '').trim();
 }
 function scheduleReformat(rawText, targetEl, timeoutMs){
@@ -1010,9 +1065,13 @@ function scheduleReformat(rawText, targetEl, timeoutMs){
   if(cached){ targetEl.innerHTML = renderMarkdownSafe(cached); return; }
   // A live call is about to go out — swap the plain-markdown text for a
   // loading note first, instead of letting the raw rendering sit there and
-  // then jump-cut to the reformatted version once the response lands.
+  // then jump-cut to the reformatted version once the response lands. No
+  // cancel button exists for reformat (nothing to repurpose), but a retry
+  // backoff still gets surfaced here instead of sitting silent for up to
+  // a minute-plus looking stuck.
   targetEl.innerHTML = '<span style="color:var(--muted)">Musterlösung lädt …</span>';
-  aiReformatAnswer(rawText, timeoutMs).then(formatted => {
+  const onStatus = (msg) => { targetEl.innerHTML = '<span style="color:var(--muted)">' + escapeHtml(msg) + '</span>'; };
+  aiReformatAnswer(rawText, timeoutMs, {onStatus}).then(formatted => {
     if(!formatted){ targetEl.innerHTML = renderMarkdownSafe(rawText); return; }
     setCachedReformat(rawText, formatted);
     targetEl.innerHTML = renderMarkdownSafe(formatted);
@@ -1023,7 +1082,7 @@ function scheduleReformat(rawText, targetEl, timeoutMs){
 // model — it gets hot-swapped by Google over time (with advance notice for
 // breaking changes), so this doesn't need to be manually bumped every time
 // a specific dated model version (e.g. gemini-2.0-flash) gets retired.
-async function aiGradeOpenQuestion(q, candidateText, timeoutMs){
+async function aiGradeOpenQuestion(q, candidateText, timeoutMs, opts){
   const prompt = 'Du bist Prüfer/in für die GPM Basiszertifikat-Prüfung im Projektmanagement (ICB4).\n' +
     'Bewerte, ob die Antwort des Kandidaten inhaltlich der Musterantwort entspricht. Die Kernaussagen müssen ' +
     'stimmen, eine wortgleiche Formulierung ist nicht nötig. Sei bei der Bewertung fair, aber nicht nachlässig.\n\n' +
@@ -1033,7 +1092,7 @@ async function aiGradeOpenQuestion(q, candidateText, timeoutMs){
     '\nAntwort des Kandidaten: ' + (candidateText || '(keine Antwort abgegeben)') +
     '\n\nAntworte AUSSCHLIESSLICH mit kompaktem JSON, ohne Markdown-Codeblock, in diesem Format:\n' +
     '{"correct": true oder false, "feedback": "ein bis zwei Sätze Begründung auf Deutsch"}';
-  const text = await callGeminiApi(prompt, timeoutMs);
+  const text = await callGeminiApi(prompt, timeoutMs, opts);
   const cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
   let parsed;
   try{ parsed = JSON.parse(cleaned); }
@@ -1920,7 +1979,9 @@ function startExam(){
     cheatRevealed: new Set(), // id -> Cheat-Modus result already revealed for this question
     aiAutoRan: false,
     aiGradingRunning: false,
+    aiGradingCancelRequested: false, // set when the bulk-grade button is clicked again mid-run — see runBulkAiGrade
     aiKeyRecheckDone: false,
+    examRateLimitSeen: false, // a 429 during a live-exam AI call — bulk grading on the results page reads this to slow itself down proactively instead of hammering an already-strained quota
     timeMinutes,
     finished: false
   };
@@ -2423,12 +2484,23 @@ function reRenderCheatSlot(q){
 function wireCheatAiBtn(q){
   const cheatAiBtn = document.getElementById('cheat-ai-btn');
   if(cheatAiBtn){
+    let cancelToken = null;
     cheatAiBtn.addEventListener('click', async ()=>{
+      if(cancelToken){
+        // Already running — repurpose this same click as "cancel" instead
+        // of starting a second grading attempt on top of the first.
+        cancelToken.cancelled = true;
+        cheatAiBtn.textContent = 'Wird abgebrochen…';
+        return;
+      }
       saveCurrentAnswer();
       const mySession = session;
-      cheatAiBtn.disabled = true;
+      cancelToken = {cancelled: false};
+      // Deliberately left enabled (not disabled) — see the cancel branch above.
       cheatAiBtn.textContent = 'Wird bewertet…';
-      await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_EXAM_MS);
+      const onStatus = (msg) => { if(document.getElementById('cheat-ai-btn') === cheatAiBtn) cheatAiBtn.textContent = msg; };
+      await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_EXAM_MS, {slowMode: mySession.examRateLimitSeen, onStatus, cancelToken});
+      cancelToken = null;
       if(session !== mySession) return; // a new exam was started meanwhile
       reRenderCheatSlot(q);
       refreshCircleStates();
@@ -2466,7 +2538,7 @@ function maybeAutoGradeCheat(q){
   const fb = session.aiFeedback.get(q.id);
   if(fb && (fb.feedback || fb.error)) return;
   const mySession = session;
-  runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_EXAM_MS).then(()=>{
+  runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_EXAM_MS, {slowMode: mySession.examRateLimitSeen}).then(()=>{
     if(session !== mySession) return; // a new exam was started meanwhile
     reRenderCheatSlot(q);
     refreshCircleStates();
@@ -2856,7 +2928,10 @@ function renderResultsHtml(){
   if(totalOpen > 0){
     if(getAiKey()){
       if(session.aiGradingRunning){
-        bulkAiBtnHtml = `<button class="btn btn-blue" id="ai-grade-all-btn" disabled>⏳ KI-Bewertung läuft…</button>`;
+        // Not disabled — clicking this while a batch is running cancels it
+        // (see runBulkAiGrade) instead of being just an inert progress
+        // indicator with nothing to do until the whole batch finishes.
+        bulkAiBtnHtml = `<button class="btn btn-blue" id="ai-grade-all-btn">⏳ Bewertung abbrechen</button>`;
       } else if(ungradedOpen === 0){
         bulkAiBtnHtml = `<button class="btn btn-blue" id="ai-grade-all-btn" disabled>✓ KI-Bewertung abgeschlossen</button>`;
       } else {
@@ -3072,16 +3147,24 @@ function downloadAnswersCsv(){
 // sess is captured explicitly (not read from the closure) so that an in-flight
 // grading call started before "Neue Übung starten" can never write into a
 // session that has since been replaced by a fresh one.
-async function runAiGradeQuestion(sess, q, timeoutMs){
+async function runAiGradeQuestion(sess, q, timeoutMs, opts){
   try{
     const a = sess.answers.get(q.id);
     const candidateText = a && a.openHtml ? stripHtml(a.openHtml) : '';
-    const result = await aiGradeOpenQuestion(q, candidateText, timeoutMs);
+    const result = await aiGradeOpenQuestion(q, candidateText, timeoutMs, opts);
     sess.selfGrade.set(q.id, result.correct);
     recordQuestionMemory(q, {correct: result.correct});
     sess.aiFeedback.set(q.id, {feedback: result.feedback, error: null});
   } catch(err){
     sess.aiFeedback.set(q.id, {feedback: null, error: (err && err.message) || String(err)});
+    // A 429 during a live-exam call (not a results-page one) marks this
+    // session's quota as under real pressure, not just a one-off blip —
+    // runBulkAiGrade reads this afterward to space its own requests out
+    // more and widen its retry backoff, instead of repeating the same
+    // request density that may have caused the 429 in the first place.
+    if(err && err.status === 429 && timeoutMs === GEMINI_TIMEOUT_EXAM_MS){
+      sess.examRateLimitSeen = true;
+    }
     // A grading call failing suggests the key may have stopped working since
     // it was last validated (revoked, quota exhausted, etc.) — re-check once
     // per session so the start screen's notice is accurate whenever the user
@@ -3089,8 +3172,8 @@ async function runAiGradeQuestion(sess, q, timeoutMs){
     // Skip this for 503/429: those are Google's servers being transiently
     // overloaded/rate-limited, already retried in callGeminiApi(), and say
     // nothing about whether the key itself is still valid. Same for a
-    // timeout — a slow connection says nothing about the key either.
-    const isTransient = err && (err.status === 503 || err.status === 429 || err.isTimeout);
+    // timeout or a manual cancel — neither says anything about the key.
+    const isTransient = err && (err.status === 503 || err.status === 429 || err.isTimeout || err.isCancelled);
     if(!isTransient && !sess.aiKeyRecheckDone){
       sess.aiKeyRecheckDone = true;
       refreshAiKeyStatus();
@@ -3101,7 +3184,15 @@ async function runAiGradeQuestion(sess, q, timeoutMs){
 async function runBulkAiGrade(btn){
   if(!session) return;
   const mySession = session;
-  if(mySession.aiGradingRunning) return; // already running — refuse to start a second pass
+  if(mySession.aiGradingRunning){
+    // A batch is already running — the button is repurposed as a cancel
+    // control while it waits, rather than being disabled and inert for
+    // however long the whole batch takes. Already-graded questions stay
+    // graded; the loop below just stops picking up new ones.
+    mySession.aiGradingCancelRequested = true;
+    if(btn) btn.textContent = 'Wird abgebrochen…';
+    return;
+  }
   const openQs = mySession.questions.filter(q => {
     if(q.type !== 'open') return false;
     if(mySession.selfGrade.get(q.id) !== undefined) return false;
@@ -3111,19 +3202,37 @@ async function runBulkAiGrade(btn){
   if(openQs.length === 0) return;
 
   mySession.aiGradingRunning = true;
-  if(btn) btn.disabled = true;
+  mySession.aiGradingCancelRequested = false;
+  // Deliberately left enabled (not disabled) — see the cancel branch above.
+  if(btn) btn.textContent = '⏳ Bewertung abbrechen';
   // freeze any per-question AI buttons currently on screen so they can't be
   // clicked individually while the batch is in flight
   document.querySelectorAll('.ai-grade-btn').forEach(b=>{ b.disabled = true; b.textContent = '⏳ Bewertung läuft…'; });
 
+  // A 429 already seen during the live exam means this key's quota is
+  // genuinely under pressure — space bulk requests out much more (2s
+  // instead of 250ms) rather than repeating the density that likely
+  // caused it, and widen each request's own retry backoff to match (see
+  // callGeminiApi's slowMode).
+  const slowMode = mySession.examRateLimitSeen;
+  const gapMs = slowMode ? 2000 : 250;
+  // Proxies the existing aiGradingCancelRequested flag (set by the click
+  // handler above) rather than a separate flag, so callGeminiApi's retry
+  // backoff — now up to 12-108s — can interrupt itself immediately on
+  // cancel instead of always sitting through the full wait before the loop
+  // gets a chance to check again.
+  const cancelToken = {get cancelled(){ return mySession.aiGradingCancelRequested; }};
   try{
     for(let i=0;i<openQs.length;i++){
       if(session !== mySession) return; // a new exam was started meanwhile — abort silently
+      if(mySession.aiGradingCancelRequested) break;
       const q = openQs[i];
       if(mySession.selfGrade.get(q.id) !== undefined) continue; // graded by something else in the meantime
-      if(btn) btn.textContent = `Bewerte ${i+1}/${openQs.length}…`;
-      await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_RESULTS_MS);
-      if(i < openQs.length-1) await new Promise(r=>setTimeout(r, 250));
+      const progressPrefix = `⏳ Bewertung abbrechen (${i+1}/${openQs.length})`;
+      if(btn) btn.textContent = progressPrefix;
+      const onStatus = (msg) => { if(btn) btn.textContent = `${progressPrefix} – ${msg}`; };
+      await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_RESULTS_MS, {slowMode, onStatus, cancelToken});
+      if(i < openQs.length-1) await new Promise(r=>setTimeout(r, gapMs));
     }
   } finally {
     mySession.aiGradingRunning = false;
@@ -3251,14 +3360,28 @@ function renderReviewItem(q, idx){
 
   const aiBtn = div.querySelector('.ai-grade-btn[data-ai]');
   if(aiBtn){
+    let cancelToken = null;
     aiBtn.addEventListener('click', async ()=>{
+      if(cancelToken){
+        // Already running this question's own grading — repurpose the
+        // click as cancel instead of a (refused) second start.
+        cancelToken.cancelled = true;
+        aiBtn.textContent = 'Wird abgebrochen…';
+        return;
+      }
       const mySession = session;
-      if(mySession.aiGradingRunning) return; // a batch run is already in flight — refuse
+      if(mySession.aiGradingRunning) return; // a different grading operation (bulk, or another question) is already in flight — refuse
       if(mySession.selfGrade.get(q.id) !== undefined && session.aiFeedback.get(q.id) && session.aiFeedback.get(q.id).feedback) return; // already AI-graded
       mySession.aiGradingRunning = true;
-      document.querySelectorAll('.ai-grade-btn').forEach(b=>{ b.disabled = true; b.textContent = '⏳ Bewertung läuft…'; });
+      cancelToken = {cancelled: false};
+      // Every OTHER per-question button stays disabled/inert during this
+      // one's run — only the button actually doing the work stays
+      // clickable, as the cancel control for its own call.
+      document.querySelectorAll('.ai-grade-btn').forEach(b=>{ if(b !== aiBtn){ b.disabled = true; b.textContent = '⏳ Bewertung läuft…'; } });
       aiBtn.textContent = 'Wird bewertet…';
-      await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_RESULTS_MS);
+      const onStatus = (msg) => { aiBtn.textContent = msg; };
+      await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_RESULTS_MS, {slowMode: mySession.examRateLimitSeen, onStatus, cancelToken});
+      cancelToken = null;
       mySession.aiGradingRunning = false;
       if(session !== mySession) return; // a new exam was started meanwhile
       const scr = document.getElementById('screen-results');
@@ -3457,6 +3580,13 @@ function extractSheetId(url){
   const bare = (url || '').trim();
   return /^[a-zA-Z0-9_-]{20,}$/.test(bare) ? bare : null;
 }
+// Picks up an explicit gid from the pasted URL (either ?gid=… or the
+// #gid=… fragment a browser address bar shows while viewing a specific
+// tab) — null if the URL doesn't name one at all.
+function extractSheetGid(url){
+  const m = /[?&#]gid=(\d+)/.exec(url || '');
+  return m ? m[1] : null;
+}
 
 const sheetUrlInput = document.getElementById('cfg-sheet-url');
 const sheetStatus = document.getElementById('sheet-status');
@@ -3536,8 +3666,24 @@ async function loadQuestions(){
   sheetReloadBtn.disabled = true;
   startBtn.classList.add('btn-not-ready');
   try{
-    const url = `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=0`;
-    const res = await fetch(url);
+    // Previously always forced &gid=0 (the first sheet's ID at creation
+    // time) — but gids don't shift when tabs are reordered, so a sheet
+    // whose original first tab was ever deleted/recreated has no gid=0 at
+    // all, and Google's export endpoint 400s on a gid that doesn't exist.
+    // That's indistinguishable from a real problem by status code alone,
+    // but it has nothing to do with sharing — reported "400 despite
+    // correct sharing settings" cases are consistent with exactly this.
+    // Omitting gid entirely makes Google export whichever tab is actually
+    // first, regardless of its real gid; a gid explicitly present in the
+    // pasted URL (e.g. copied while viewing a specific tab) is tried
+    // first since that's a deliberate choice, but falls back the same way
+    // if that specific tab no longer exists either.
+    const requestedGid = extractSheetGid(rawValue);
+    const buildUrl = gid => `https://docs.google.com/spreadsheets/d/${id}/export?format=csv` + (gid ? `&gid=${gid}` : '');
+    let res = await fetch(buildUrl(requestedGid));
+    if(!res.ok && requestedGid){
+      res = await fetch(buildUrl(null));
+    }
     if(!res.ok) throw new Error('HTTP ' + res.status);
     const text = await res.text();
     const rows = parseCsv(text);
@@ -3558,8 +3704,17 @@ async function loadQuestions(){
     updateShareableUrl(); // canonicalizes a bare-path sheet injection into ?sheet=... too
   } catch(err){
     standNote.classList.add('hidden');
-    sheetStatus.textContent = '✗ Fehler beim Laden: ' + ((err && err.message) || err) +
-      ' — Sheet muss auf "Jeder mit dem Link kann ansehen" freigegeben sein.';
+    // A 403 really is a sharing/permissions problem — that guidance stays.
+    // A 400 (even after the gid-fallback retry above) is a malformed
+    // request, not an access problem — telling someone whose sharing is
+    // already correct to double-check sharing just sends them in a circle,
+    // so point at a stale/invalid sheet link instead.
+    const statusMatch = /HTTP (\d+)/.exec((err && err.message) || '');
+    const status = statusMatch ? parseInt(statusMatch[1], 10) : null;
+    const guidance = status === 400
+      ? ' — das deutet nicht auf ein Freigabe-Problem hin, sondern auf eine ungültige Sheet-URL (z. B. nach Löschen/Neuanlegen eines Tabellenblatts). Bitte den Link erneut aus dem Browser kopieren.'
+      : ' — Sheet muss auf "Jeder mit dem Link kann ansehen" freigegeben sein.';
+    sheetStatus.textContent = '✗ Fehler beim Laden: ' + ((err && err.message) || err) + guidance;
     sheetStatus.className = 'small-note status-bad';
     setSheetToggleBadge('✗ Fehler');
     updateSummary();
