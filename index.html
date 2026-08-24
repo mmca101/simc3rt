@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="SiM-C3RT">
-<title>SiM-C3RT v1.2</title>
+<title>SiM-C3RT v1.3</title>
 <!-- Link-sharing preview (Discord, WhatsApp, Slack, iMessage, etc.) — needs
      an absolute image URL, not a relative path, for external crawlers to
      resolve it correctly regardless of where the link was shared from. -->
@@ -149,6 +149,8 @@ button{font-family:inherit;cursor:pointer}
 #mastery-bar-results{margin-bottom:24px}
 .mastery-bar-details{margin-top:6px}
 .mastery-bar-details summary{font-size:11.5px;color:var(--muted);cursor:pointer}
+.reset-selection-link{display:block;width:100%;margin:10px auto 0;padding:8px 0 0;background:none;border:none;font-size:11.5px;color:var(--muted);cursor:pointer;text-align:center}
+.reset-selection-link:hover{text-decoration:underline}
 .mastery-legend{list-style:none;margin:6px 0 0;padding:0;font-size:12px;color:var(--text);display:flex;flex-direction:column;gap:4px}
 .mastery-legend li{display:flex;align-items:center;gap:7px}
 .mastery-dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto}
@@ -554,10 +556,12 @@ input[type=range]{accent-color:var(--blue)}
       <button class="btn btn-primary btn-not-ready" id="start-btn">Simulation starten</button>
       <div class="toolbar-row secondary-actions-row">
         <button class="btn btn-blue" id="rules-toggle-btn">Regeln anzeigen</button>
-        <button class="btn btn-secondary" id="cfg-reset-btn">Standard laden</button>
+        <button class="btn btn-secondary" id="cfg-reset-btn">Prüfung starten</button>
       </div>
     </div>
   </div>
+
+  <button class="reset-selection-link" id="reset-selection-link">Auswahl zurücksetzen</button>
 
   <div id="mastery-bar-outside-slot"></div>
 
@@ -597,7 +601,7 @@ input[type=range]{accent-color:var(--blue)}
       </svg>
       <span>mmca101/simc3rt</span>
     </a>
-    <span class="version-badge">v1.2</span>
+    <span class="version-badge">v1.3</span>
   </div>
 </div>
 
@@ -609,7 +613,7 @@ input[type=range]{accent-color:var(--blue)}
         <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
       </svg>
     </button>
-    <span class="version-badge topbar-version">v1.2</span>
+    <span class="version-badge topbar-version">v1.3</span>
     <div class="brand">SiM-C3RT</div>
     <div class="timer" id="timer-display">90:00</div>
     <button class="end-btn" id="end-exam-btn">PRÜFUNG BEENDEN</button>
@@ -903,18 +907,39 @@ const GEMINI_RETRYABLE_STATUS = new Set([503, 429]);
 // overloaded — still within the same API key's free tier, no extra setup.
 const GEMINI_PRIMARY_MODEL = 'gemini-flash-latest';
 const GEMINI_FALLBACK_MODEL = 'gemini-flash-lite-latest';
+// A request that's merely slow (weak mobile connection, not an actual error
+// from Google) previously had nothing to make it give up — it could hang
+// indefinitely with no fallback ever triggering, since the retry loop below
+// only reacts to an actual HTTP error status. Not treated as retryable here:
+// if the connection itself is the bottleneck, retrying on it won't help, so
+// a timeout fails fast into whatever fallback the caller already has
+// (manual self-grade buttons for grading, plain-text rendering for the
+// Musterlösung reformat) rather than compounding into a 3-retry-plus-
+// fallback-model cascade that could take a minute or more to give up.
+const GEMINI_TIMEOUT_MS = 15000;
 
 async function callGeminiOnce(prompt, model){
   const apiKey = getAiKey();
   if(!apiKey) throw new Error('Kein API-Key hinterlegt.');
-  const res = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=` + encodeURIComponent(apiKey),
-    {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({contents: [{parts: [{text: prompt}]}]})
+  let res;
+  try{
+    res = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=` + encodeURIComponent(apiKey),
+      {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({contents: [{parts: [{text: prompt}]}]}),
+        signal: AbortSignal.timeout(GEMINI_TIMEOUT_MS)
+      }
+    );
+  } catch(err){
+    if(err.name === 'TimeoutError' || err.name === 'AbortError'){
+      const timeoutErr = new Error('Zeitüberschreitung — keine Antwort innerhalb von ' + (GEMINI_TIMEOUT_MS/1000) + 's.');
+      timeoutErr.isTimeout = true;
+      throw timeoutErr;
     }
-  );
+    throw err;
+  }
   if(!res.ok){
     const errBody = await res.text().catch(()=> '');
     const friendly = res.status === 503
@@ -939,13 +964,22 @@ async function callGeminiApi(prompt){
       return await callGeminiOnce(prompt, GEMINI_PRIMARY_MODEL);
     } catch(err){
       lastErr = err;
+      // A timeout won't fix itself by asking the SAME model again — skip
+      // straight to trying the fallback model below instead of burning
+      // more time on repeat attempts here.
+      if(err.isTimeout) break;
       if(!GEMINI_RETRYABLE_STATUS.has(err.status) || attempt === 3) break;
       await new Promise(r => setTimeout(r, attempt * 1200));
     }
   }
-  // Primary model is still failing with a transient error after 3 tries —
-  // one last attempt on the free Lite tier before giving up entirely.
-  if(GEMINI_RETRYABLE_STATUS.has(lastErr.status)){
+  // Primary model is still failing with a transient error (or timed out)
+  // — one attempt on the free Lite tier before giving up entirely. A
+  // timeout here too means BOTH models independently failed to respond in
+  // time, which points at the connection itself being the bottleneck
+  // rather than one specific model being overloaded — that's the point at
+  // which it's actually safe to conclude "give up, hand this to manual
+  // grading" instead of assuming the first timeout already meant that.
+  if(GEMINI_RETRYABLE_STATUS.has(lastErr.status) || lastErr.isTimeout){
     try{
       return await callGeminiOnce(prompt, GEMINI_FALLBACK_MODEL);
     } catch(fallbackErr){
@@ -1176,11 +1210,29 @@ function questionMemoryTier(q, mem){
 }
 // Groups a pool into its six priority tiers (shuffled within each) and
 // concatenates them in priority order, so a later .slice(0, n) naturally
-// draws the highest-priority questions first.
-function prioritizeByMemory(pool, mem){
-  const tiers = [[], [], [], [], [], []];
-  for(const q of pool) tiers[questionMemoryTier(q, mem) - 1].push(q);
-  return tiers.flatMap(shuffle);
+// draws the highest-priority questions first. With a large "currently wrong"
+// backlog (tiers 1+2) in one KE, a strict priority order can fill an entire
+// exam's slots for that KE from that backlog alone, session after session —
+// the student never reaches filler/green/gold review until every wrong
+// question there finally clears, which in practice feels like the same
+// failures being served over and over rather than the learning effect
+// having a chance to show. When the caller knows how many questions it's
+// about to draw (wantCount), the wrong-tier share of THAT draw is capped at
+// WRONG_TIER_CAP_FRACTION — tier1 stays prioritized over tier2 within the
+// capped share, any overflow is appended after tiers 3-6 rather than
+// dropped (so a KE whose pool genuinely can't fill wantCount otherwise still
+// gets its full count), and re-shuffling+re-capping on every exam means the
+// cap doesn't lock in a fixed subset — which of the backlog's questions
+// make the cut naturally rotates across sessions instead of being static.
+const WRONG_TIER_CAP_FRACTION = 0.5;
+function prioritizeByMemory(pool, mem, wantCount){
+  const tiers = [[], [], [], [], [], []].map((_, i) =>
+    shuffle(pool.filter(q => questionMemoryTier(q, mem) === i + 1)));
+  const wrong = tiers[0].concat(tiers[1]);
+  const rest = tiers[2].concat(tiers[3], tiers[4], tiers[5]);
+  if(wantCount === undefined || wrong.length === 0) return wrong.concat(rest);
+  const wrongCap = Math.max(0, Math.ceil(wantCount * WRONG_TIER_CAP_FRACTION));
+  return wrong.slice(0, wrongCap).concat(rest, wrong.slice(wrongCap));
 }
 
 // ---------- persisted configurator state (survives reloads until reset) ----------
@@ -1472,6 +1524,15 @@ function allocateQuestionCounts(keys, total){
   return counts;
 }
 
+// Rounds to floor(x) or ceil(x) at random, weighted by the fractional part
+// — e.g. 11.59 lands on 12 about 59% of the time and 11 about 41% of the
+// time, rather than Math.round's fixed "always 12". Unbiased in expectation
+// (average over many exams converges to the true x), unlike a flat 50/50
+// coin flip which would over-represent the farther option.
+function stochasticRound(x){
+  const floor = Math.floor(x);
+  return Math.random() < (x - floor) ? floor + 1 : floor;
+}
 // Decides, per Kompetenzelement, how many of its already-fixed question
 // count (from allocateQuestionCounts above) go to Checkbox vs Freitext —
 // driven by a single GLOBAL target derived from the Checkboxfragenanteil
@@ -1483,10 +1544,12 @@ function allocateQuestionCounts(keys, total){
 // then distributes the shared global budget across KEs' remaining headroom
 // the same weighted-round-robin way allocateQuestionCounts() distributes
 // the totals themselves, so the aggregate hits the target whenever it's
-// achievable at all.
+// achievable at all. The global target itself uses stochasticRound rather
+// than Math.round — a 19% split of 61 (11.59) should occasionally serve 11
+// instead of always defaulting to 12.
 function allocateMcCounts(keys, keCounts, byKe, mcPercent){
   const realTotal = keys.reduce((sum,k)=> sum + (keCounts.get(k) || 0), 0);
-  const globalMcTarget = Math.round(realTotal * mcPercent / 100);
+  const globalMcTarget = stochasticRound(realTotal * mcPercent / 100);
   const mcMin = new Map(), mcMax = new Map(), mcTaken = new Map();
   for(const k of keys){
     const count = keCounts.get(k) || 0;
@@ -1657,7 +1720,7 @@ applySavedScalarFields();
 updateFocusLabel();
 updateToggleBadge();
 
-document.getElementById('cfg-reset-btn').addEventListener('click', ()=>{
+document.getElementById('reset-selection-link').addEventListener('click', ()=>{
   document.getElementById('cfg-count').value = '61';
   document.getElementById('cfg-time').value = '90';
   grid.querySelectorAll('input[type=checkbox]').forEach(el=>el.checked=true);
@@ -1674,6 +1737,57 @@ document.getElementById('cfg-reset-btn').addEventListener('click', ()=>{
   clearSavedConfig();
   updateShareableUrl(); // drops any ?n=/t=/f=/ke=/kw=/sheet= back to a clean URL
   // deliberately does not touch the saved Gemini API key
+});
+// "Prüfung starten": a true, unbiased exam simulation in one click — default
+// config, Lerngedächtnis off — without requiring anyone to find and uncheck
+// the memory checkbox themselves first (most users never open a collapsed
+// accordion tab, so that checkbox is effectively undiscoverable for them).
+// Deliberately does NOT reuse the reset-link's logic: this only mutates the
+// on-screen fields and keWeights for the single synchronous startExam() call
+// below, then restores every one of them immediately after — no persistConfig()
+// or clearSavedConfig() call anywhere in this flow, so the user's actual saved
+// configuration (and the Lerngedächtnis checkbox they'd see if they ever did
+// open that tab) is completely untouched. Since startExam() is synchronous and
+// the browser doesn't repaint mid-script, this mutate-then-restore round trip
+// is never visible — there's no flicker, and nothing to "put back" afterward
+// because nothing real ever changed in the first place.
+document.getElementById('cfg-reset-btn').addEventListener('click', ()=>{
+  const countEl = document.getElementById('cfg-count');
+  const timeEl = document.getElementById('cfg-time');
+  const mcFirstEl = document.getElementById('cfg-mc-first');
+  const cheatEl = document.getElementById('cfg-cheat-mode');
+  const memoryEl = document.getElementById('cfg-use-memory');
+  const checkboxes = Array.from(grid.querySelectorAll('input[type=checkbox]'));
+  const weightInputs = Array.from(grid.querySelectorAll('.ke-weight-input'));
+
+  const snapshot = {
+    count: countEl.value, time: timeEl.value, focus: focusSlider.value,
+    mcFirst: mcFirstEl.checked, cheat: cheatEl.checked, memory: memoryEl.checked,
+    keChecked: checkboxes.map(el => el.checked),
+    weightValues: weightInputs.map(el => el.value),
+    keWeights: new Map(keWeights)
+  };
+
+  countEl.value = '61';
+  timeEl.value = '90';
+  focusSlider.value = '19';
+  mcFirstEl.checked = true;
+  cheatEl.checked = false;
+  memoryEl.checked = false;
+  checkboxes.forEach(el => el.checked = true);
+  applyPruefungsformatWeights();
+
+  startExam();
+
+  countEl.value = snapshot.count;
+  timeEl.value = snapshot.time;
+  focusSlider.value = snapshot.focus;
+  mcFirstEl.checked = snapshot.mcFirst;
+  cheatEl.checked = snapshot.cheat;
+  memoryEl.checked = snapshot.memory;
+  checkboxes.forEach((el, i) => el.checked = snapshot.keChecked[i]);
+  weightInputs.forEach((el, i) => el.value = snapshot.weightValues[i]);
+  keWeights = snapshot.keWeights;
 });
 
 const rulesCard = document.getElementById('rules-card');
@@ -1745,16 +1859,16 @@ function startExam(){
       const count = keCounts.get(k);
       if(count === 0) continue;
       const pool = byKe.get(k) || [];
-      const mcPool = useMemory
-        ? prioritizeByMemory(pool.filter(q => q.type === 'mc'), questionMemory)
-        : shuffle(pool.filter(q => q.type === 'mc'));
-      const openPool = useMemory
-        ? prioritizeByMemory(pool.filter(q => q.type === 'open'), questionMemory)
-        : shuffle(pool.filter(q => q.type === 'open'));
       // mcWant already respects this KE's real Checkbox/Freitext pool sizes
       // (see allocateMcCounts) — no shortfall backfill needed here.
       const mcWant = keMcCounts.get(k);
       const openWant = count - mcWant;
+      const mcPool = useMemory
+        ? prioritizeByMemory(pool.filter(q => q.type === 'mc'), questionMemory, mcWant)
+        : shuffle(pool.filter(q => q.type === 'mc'));
+      const openPool = useMemory
+        ? prioritizeByMemory(pool.filter(q => q.type === 'open'), questionMemory, openWant)
+        : shuffle(pool.filter(q => q.type === 'open'));
       mc = mc.concat(mcPool.slice(0, mcWant));
       open = open.concat(openPool.slice(0, openWant));
     }
@@ -2219,7 +2333,11 @@ function cheatResultBody(q){
 function renderCheatPanel(q){
   const revealed = session.cheatRevealed.has(q.id);
   const body = revealed ? cheatResultBody(q) : 'aktiviert';
-  return `<div class="cheat-panel${revealed ? '' : ' slim'}" id="cheat-panel">
+  // padding pinned to 10px 18px (matching the flanking Vorherige/Nächste
+  // buttons) in every state — .slim's own 10px 16px and the base .cheat-panel's
+  // 14px 16px both get overridden here, so removing .slim on reveal only
+  // changes layout (flex→block), never the padding itself.
+  return `<div class="cheat-panel${revealed ? '' : ' slim'}" id="cheat-panel" style="padding:10px 18px">
     <div class="cheat-label">🔓 Übungs-Modus</div>
     <div id="cheat-result" aria-live="polite">${body}</div>
   </div>`;
@@ -2255,9 +2373,18 @@ function renderCheatMobileSlot(q){
   // 6px margin-top (base rule), so 8+6=14 matches the bottom-nav's own
   // inter-button gap exactly instead of stacking on top of it.
   if(!session.cheatRevealed.has(q.id)){
-    return `<button class="btn btn-cheat" id="cheat-reveal-btn" style="width:100%;margin-top:10px;margin-bottom:8px">Ergebnis anzeigen</button>`;
+    // display:block (buttons default to inline-block) so this participates
+    // in margin collapsing with .answer-area above it exactly like the
+    // .cheat-panel div that replaces it on click — otherwise the button's
+    // margin-top adds to .answer-area's margin-bottom instead of collapsing
+    // with it, and the gap visibly shrinks the instant reveal is clicked.
+    return `<button class="btn btn-cheat" id="cheat-reveal-btn" style="display:block;width:100%;margin-top:10px;margin-bottom:8px">Ergebnis anzeigen</button>`;
   }
-  return `<div class="cheat-panel" id="cheat-panel" style="margin-top:10px;margin-bottom:8px">
+  // padding pinned to 10px 18px (not the base .cheat-panel 14px 16px) so
+  // this stays visually consistent with the Vorherige/Nächste buttons it's
+  // stacked between, regardless of how much taller the actual content makes
+  // the box — content length should be the only thing that changes here.
+  return `<div class="cheat-panel" id="cheat-panel" style="margin-top:10px;margin-bottom:8px;padding:10px 18px">
     <div id="cheat-result" aria-live="polite">${cheatResultBody(q)}</div>
   </div>`;
 }
@@ -2349,7 +2476,12 @@ function wireCheatPanel(q){
       session.cheatRevealed.add(q.id);
       revealBtn.remove();
       if(nav) nav.classList.remove('has-cheat');
-      if(panel) panel.classList.remove('slim');
+      // .slim carries its own padding (vs the base .cheat-panel's 14px 16px)
+      // — removing the class to unlock block layout for the multi-line
+      // result content would otherwise also grow the padding right at this
+      // instant. The inline padding set in renderCheatPanel() already
+      // overrides both, so this is just re-asserting it after the class swap.
+      if(panel){ panel.classList.remove('slim'); panel.style.padding = '10px 18px'; }
       if(q.type === 'mc') applyCheatMcColoring(q);
       resultEl.textContent = 'Ergebnis wird geladen…';
       refreshCircleStates();
@@ -2388,7 +2520,7 @@ function wireCheatMobileSlot(q){
       const mySession = session;
       session.cheatRevealed.add(q.id);
       if(q.type === 'mc') applyCheatMcColoring(q);
-      revealBtn.outerHTML = `<div class="cheat-panel" id="cheat-panel" style="margin-top:10px">
+      revealBtn.outerHTML = `<div class="cheat-panel" id="cheat-panel" style="margin-top:10px;margin-bottom:8px;padding:10px 18px">
         <div id="cheat-result" aria-live="polite">Ergebnis wird geladen…</div>
       </div>`;
       applyCheatMobileSizing();
@@ -2776,13 +2908,19 @@ function renderResultsHtml(){
   }
   html += '</div>';
 
+  // Same predicates renderReviewList() uses per filter, so these counts
+  // always match what clicking the button actually shows.
+  const wrongCount = session.questions.filter(q => q.type==='mc' ? gradeMC(q) !== true : effectiveOpenGrade(q) !== true).length;
+  const correctCount = session.questions.filter(q => q.type==='mc' ? gradeMC(q) === true : effectiveOpenGrade(q) === true).length;
+  const mcCount = session.questions.filter(q => q.type==='mc').length;
+  const openCount = session.questions.filter(q => q.type==='open').length;
   html += `<div class="filter-row" id="review-filters">
     <button data-f="all">Alle (${session.questions.length})</button>
-    <button class="active" data-f="wrong">Falsch</button>
-    <button data-f="correct">Richtig</button>
+    <button class="active" data-f="wrong">Falsch (${wrongCount})</button>
+    <button data-f="correct">Richtig (${correctCount})</button>
     <button data-f="pending">Noch auszuwerten (${ungradedOpen})</button>
-    <button data-f="mc">Checkbox</button>
-    <button data-f="open">Freitext</button>
+    <button data-f="mc">Checkbox (${mcCount})</button>
+    <button data-f="open">Freitext (${openCount})</button>
   </div>`;
 
   html += `<div id="review-list"></div>`;
@@ -2943,8 +3081,9 @@ async function runAiGradeQuestion(sess, q){
     // gets back there, without re-pinging on every single failure in a batch.
     // Skip this for 503/429: those are Google's servers being transiently
     // overloaded/rate-limited, already retried in callGeminiApi(), and say
-    // nothing about whether the key itself is still valid.
-    const isTransient = err && (err.status === 503 || err.status === 429);
+    // nothing about whether the key itself is still valid. Same for a
+    // timeout — a slow connection says nothing about the key either.
+    const isTransient = err && (err.status === 503 || err.status === 429 || err.isTimeout);
     if(!isTransient && !sess.aiKeyRecheckDone){
       sess.aiKeyRecheckDone = true;
       refreshAiKeyStatus();
