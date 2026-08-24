@@ -1,10 +1,6 @@
 <img src="sim-cert-basic-logo-cropped.png" width="200" height="200"> <img src="icon-512.png" width="100" height="100">&nbsp;&nbsp;&nbsp;<img src="icon-192.png" width="50" height="50">
 
-# SiM-C3RT Prüfungssimulator
-
-Eine inoffizielle, schlanke Übungsplattform für das **GPM Basiszertifikat im
-Projektmanagement**. Nachgebaut nach der UI-Beschreibung im "Anleitung zur
-Nutzung des Zertifizierungsportals" (Kap. 6, S. 19–24).
+# SiM-C3RT - eine inoffizielle, schlanke Übungsplattform
 
 **Die gesamte App ist im Kern eine einzige Datei: [`index.html`](index.html).**
 Kein Build-Schritt, keine Abhängigkeiten. Der Fragenpool wird bei jedem
