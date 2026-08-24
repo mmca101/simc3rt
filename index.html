@@ -1158,6 +1158,26 @@ async function aiGradeOpenQuestion(q, candidateText, timeoutMs, opts){
     'Begriffe mit je eigener Definition), darf Großzügigkeit NICHT dazu führen, dass ein einzelner Teilpunkt durch ' +
     'einen inhaltlich falschen Begriff ersetzt wird — jeder benannte Teilpunkt muss für sich inhaltlich stimmen, ' +
     'auch wenn Anzahl und Struktur der genannten Punkte insgesamt passen.\n';
+  // Known, confirmed-broken outlier: this specific question's grading was
+  // live-tested to accept a wrong defining criterion (e.g. "Ressourcen"
+  // swapped in for "Funktionen") as long as the three category labels
+  // themselves were present, unaffected by the general instruction above.
+  // Two structurally similar cross-checks (Anordnungsbeziehungen,
+  // FAZ/FEZ/SAZ/SEZ) came back clean under the general instruction, so this
+  // doesn't look systemic enough to justify a broader mechanism (a forced
+  // per-point JSON breakdown was tried and didn't fix it either, see git
+  // history) — a narrow, question-specific patch, verified live to fix the
+  // confirmed failure, is cheaper than chasing a general fix for a
+  // one-question problem.
+  const pspSpecialCase = /PSP-Gliederungsarten/i.test(q.stem)
+    ? 'SPEZIALHINWEIS für diese Frage: Die drei Gliederungsarten unterscheiden sich jeweils durch genau EIN ' +
+      'definierendes Kriterium: objektorientiert = nach Produkten/Komponenten/Objekten, funktionsorientiert = nach ' +
+      'Funktionen/Verrichtungen/Aufgabenbereichen, phasenorientiert = nach zeitlichen Abläufen/Phasen. Prüfe für ' +
+      'jede genannte Gliederungsart explizit, ob GENAU dieses Kriterium (nicht ein benachbarter, aber inhaltlich ' +
+      'anderer Begriff wie "Ressourcen" statt "Funktionen" oder "Kunden" statt "Produkte") korrekt wiedergegeben ' +
+      'wurde — ein falsches Kriterium macht diesen Teilpunkt falsch, selbst wenn der Name der Gliederungsart selbst ' +
+      'richtig genannt wurde und die übrigen zwei Gliederungsarten stimmen.\n'
+    : '';
   const prompt = 'Du bist Prüfer/in für die GPM Basiszertifikat-Prüfung im Projektmanagement (ICB4).\n' +
     'Bewerte, ob die Antwort des Kandidaten inhaltlich der Musterantwort entspricht — urteile wie ein fairer, mäßig ' +
     'großzügiger menschlicher Prüfer, nicht wie ein exakter Textabgleich. Erwarte NIEMALS eine wortwörtliche ' +
@@ -1176,7 +1196,7 @@ async function aiGradeOpenQuestion(q, candidateText, timeoutMs, opts){
     'oberflächliche, nur thematisch angrenzende oder inhaltlich falsche Antworten durchgewunken werden — bleib bei ' +
     'eindeutig fehlendem oder falschem Kernverständnis konsequent bei "falsch". Sei insgesamt fair, aber nicht ' +
     'nachlässig.\n' +
-    slashGuidance + complexityGuidance + '\n' +
+    slashGuidance + complexityGuidance + pspSpecialCase + '\n' +
     'Frage: ' + q.stem + '\n\n' +
     'Musterantwort: ' + q.answer + '\n' +
     (q.info ? ('Zusatzinfo: ' + q.info + '\n') : '') +
