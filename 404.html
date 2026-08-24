@@ -1089,9 +1089,94 @@ function scheduleReformat(rawText, targetEl, timeoutMs){
 // breaking changes), so this doesn't need to be manually bumped every time
 // a specific dated model version (e.g. gemini-2.0-flash) gets retired.
 async function aiGradeOpenQuestion(q, candidateText, timeoutMs, opts){
+  // Some Musterantworten mark acceptable alternative terms/phrasings with a
+  // "/" (spaced or on its own line, e.g. "Auftraggeber / Kunde") — without
+  // this instruction the model tends to read the whole text either side of
+  // the slash as ONE required combined answer instead of either side being
+  // independently acceptable.
+  const slashGuidance = 'Enthält die Musterantwort einen Schrägstrich (/) — umgeben von Leerzeichen oder als ' +
+    'Zeilenumbruch — kennzeichnet dieser akzeptable alternative Begriffe oder Formulierungen (z. B. "Auftraggeber / ' +
+    'Kunde" heißt: beide Varianten sind einzeln richtig, nicht dass beide genannt werden müssen). Werte eine solche ' +
+    'Trennung nicht so, als sei der gesamte Text eine einzige zusammenhängende Pflichtantwort.\n';
+  // A 3-band cutoff still collapsed too many different Musterantworten into
+  // the same treatment — a continuous 1-10 level gives the model finer
+  // resolution to calibrate against. The "/" alternative-answer marker (see
+  // slashGuidance above) would otherwise inflate this: a short Musterantwort
+  // offering 2-3 alternative phrasings of the SAME short answer isn't a long
+  // combined answer, so only the primary alternative counts toward length.
+  // Some Musterantworten mark equivalent full alternative answers with
+  // "AUCH eine gültige Antwort" / "Alternativ(e)/Alternativantwort:" instead
+  // of "/" — same principle, only the primary answer before that marker
+  // counts. NOT gated on the presence of lettered options alone: real
+  // Single-Choice Musterantworten are just "B) ..." with no such marker
+  // phrase, so they're untouched by this and still count in full.
+  function representativeAnswerForComplexity(answer){
+    const slashBlock = answer.split(/\n\s*\/\s*\n/)[0];
+    const altMarker = slashBlock.match(/AUCH eine (?:gültige|richtige|andere) Antwort|Alternativantwort|Alternative?:/i);
+    const primaryBlock = altMarker ? slashBlock.slice(0, altMarker.index) : slashBlock;
+    return primaryBlock.replace(/ \/ \S+/g, '');
+  }
+  const complexityBasis = representativeAnswerForComplexity(q.answer);
+  const wordCount = (complexityBasis.match(/\S+/g) || []).length;
+  const complexityScore = complexityBasis.length * wordCount;
+  // Linear /2000 steps saturate fast on this question set's real distribution
+  // (334 real Musterantworten checked: ~80 of them already exceed the level-10
+  // cutoff, most by a large multiple, one extreme outlier over 1M). Above the
+  // linear range, switch to log-spaced steps anchored to the ~90th percentile
+  // of that long tail (not the true max) so the one extreme outlier doesn't
+  // compress everyone else's band into level 11; anything past the anchor
+  // just clamps to the top level, same as the low end already does.
+  const LINEAR_MAX_SCORE = 20000;
+  const LOG_TAIL_ANCHOR = 130000;
+  const EXTRA_LOG_LEVELS = 3;
+  const MAX_LEVEL = 10 + EXTRA_LOG_LEVELS;
+  let complexityLevel;
+  if (complexityScore <= LINEAR_MAX_SCORE) {
+    complexityLevel = Math.min(10, Math.max(1, Math.round(complexityScore / 2000)));
+  } else {
+    const perLevelMultiplier = Math.pow(LOG_TAIL_ANCHOR / LINEAR_MAX_SCORE, 1 / EXTRA_LOG_LEVELS);
+    const extra = Math.ceil(Math.log(complexityScore / LINEAR_MAX_SCORE) / Math.log(perLevelMultiplier));
+    complexityLevel = Math.min(MAX_LEVEL, 10 + Math.max(1, extra));
+  }
+  // A source citation ("Dittmann ...", "Siehe ... Seite ...") or an embedded
+  // arithmetic formula ("=") pads length/word-count without indicating real
+  // leeway for the candidate — neither is something they're expected to
+  // reproduce or that should be graded loosely. A flat -1 is a deliberately
+  // simple correction rather than trying to model exactly how much text
+  // either one adds; both trigger the same single-step correction (not
+  // stacked) if a Musterantwort happens to contain both.
+  const hasCitation = /Dittmann|Siehe[^\n]*Seite/i.test(q.answer);
+  const hasFormula = /=/.test(q.answer);
+  if (hasCitation || hasFormula) complexityLevel = Math.max(1, complexityLevel - 1);
+  const complexityGuidance = 'Kritikalitäts-Level dieser Musterantwort: ' + complexityLevel + ' von ' + MAX_LEVEL +
+    ' (berechnet aus Zeichenzahl × Wortanzahl der primären Musterantwort ohne alternative "/"-Formulierungen: ' +
+    complexityBasis.length + ' × ' + wordCount + ' = ' + complexityScore + '). 1 bedeutet sehr kurz/einfach — bewerte ' +
+    'hier sehr kritisch/streng, enger Wortabgleich. ' + MAX_LEVEL + ' bedeutet extrem lang/komplex — bewerte hier ' +
+    'maximal großzügig, nur die semantische Gesamtaussage zählt statt vollständiger Abdeckung. Nutze dieses Level als ' +
+    'feine Kalibrierung der oben beschriebenen Gleitskala, statt grob in wenige Stufen zu denken.\n' +
+    'WICHTIG dabei: Besteht die Musterantwort aus mehreren klar benannten/gelabelten Teilpunkten (z. B. mehrere ' +
+    'Begriffe mit je eigener Definition), darf Großzügigkeit NICHT dazu führen, dass ein einzelner Teilpunkt durch ' +
+    'einen inhaltlich falschen Begriff ersetzt wird — jeder benannte Teilpunkt muss für sich inhaltlich stimmen, ' +
+    'auch wenn Anzahl und Struktur der genannten Punkte insgesamt passen.\n';
   const prompt = 'Du bist Prüfer/in für die GPM Basiszertifikat-Prüfung im Projektmanagement (ICB4).\n' +
-    'Bewerte, ob die Antwort des Kandidaten inhaltlich der Musterantwort entspricht. Die Kernaussagen müssen ' +
-    'stimmen, eine wortgleiche Formulierung ist nicht nötig. Sei bei der Bewertung fair, aber nicht nachlässig.\n\n' +
+    'Bewerte, ob die Antwort des Kandidaten inhaltlich der Musterantwort entspricht — urteile wie ein fairer, mäßig ' +
+    'großzügiger menschlicher Prüfer, nicht wie ein exakter Textabgleich. Erwarte NIEMALS eine wortwörtliche ' +
+    'Übereinstimmung — akzeptiere die eigene Formulierung und Interpretation des Kandidaten, solange sie inhaltlich ' +
+    '(semantisch) richtig ist.\n' +
+    'Als Faustregel gilt dabei eine Gleitskala je nach Länge UND Komplexität der Musterantwort (Komplexität = Anzahl ' +
+    'enthaltener Teilaspekte/Kriterien, nicht nur Zeichenzahl):\n' +
+    '- Je kürzer und einfacher sie ist (z. B. ein einzelner Fachbegriff oder eine kurze Tatsache), desto enger sollte ' +
+    'die inhaltliche Übereinstimmung sein und desto weniger Großzügigkeit ist angebracht — hier gibt es wenig ' +
+    'Spielraum für gleichwertige Umformulierungen.\n' +
+    '- Je länger und komplexer die Musterantwort (mehrere Teilaspekte, Kriterien oder Beispiele), desto stärker ' +
+    'zählt die semantische Gesamtaussage statt vollständiger Abdeckung aller Details — UND desto großzügiger darfst ' +
+    'du sein: Ist die Kernidee klar richtig verstanden und nur ein einzelnes Detail (z. B. ein schwaches Beispiel) ' +
+    'unsauber, werte die Antwort trotzdem noch als richtig.\n' +
+    'Da dies ein Übungstool zur Prüfungsvorbereitung ist, darf diese Großzügigkeit nicht dazu führen, dass ' +
+    'oberflächliche, nur thematisch angrenzende oder inhaltlich falsche Antworten durchgewunken werden — bleib bei ' +
+    'eindeutig fehlendem oder falschem Kernverständnis konsequent bei "falsch". Sei insgesamt fair, aber nicht ' +
+    'nachlässig.\n' +
+    slashGuidance + complexityGuidance + '\n' +
     'Frage: ' + q.stem + '\n\n' +
     'Musterantwort: ' + q.answer + '\n' +
     (q.info ? ('Zusatzinfo: ' + q.info + '\n') : '') +
