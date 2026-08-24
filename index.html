@@ -969,20 +969,26 @@ async function callGeminiOnce(prompt, model, timeoutMs){
     data.candidates[0].content.parts[0].text) || '';
 }
 
-// Ticks down a backoff wait in ~250ms steps (responsive to cancellation)
-// while reporting a human-readable countdown once per second via
-// opts.onStatus — a 12-108s silent wait otherwise looks indistinguishable
-// from being stuck. Resolves early the instant opts.cancelToken.cancelled
-// flips true, rather than always waiting out the full delay.
+// Ticks through a backoff wait in ~400ms steps (still responsive to
+// cancellation) while reporting a simple looping "…" progress indicator
+// via opts.onStatus — a 12-108s silent wait otherwise looks
+// indistinguishable from being stuck. A precise countdown in seconds was
+// tried here first and turned out to read as more confusing than helpful
+// (too much detail for what's just "still working"), so this only ever
+// shows one generic in-progress message, not the retry mechanics behind
+// it — resolves early the instant opts.cancelToken.cancelled flips true,
+// rather than always waiting out the full delay.
 function waitWithCountdown(delayMs, opts){
   return new Promise(resolve => {
     const start = Date.now();
+    let dotPhase = 0;
     const tick = () => {
       if(opts && opts.cancelToken && opts.cancelToken.cancelled){ resolve(); return; }
       const remaining = delayMs - (Date.now() - start);
       if(remaining <= 0){ resolve(); return; }
-      if(opts && opts.onStatus) opts.onStatus('Erneuter Versuch in ' + Math.ceil(remaining/1000) + 's…');
-      setTimeout(tick, 250);
+      if(opts && opts.onStatus) opts.onStatus('KI-Antwort wird generiert' + '.'.repeat((dotPhase % 3) + 1));
+      dotPhase++;
+      setTimeout(tick, 400);
     };
     tick();
   });
