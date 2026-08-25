@@ -761,7 +761,7 @@ function updateToggleBadge(){
   if(aiStatusShort !== 'KI') parts.push(aiStatusShort);
   if(cheatOn) parts.push('🔎 ✓');
   if(friendlyOn) parts.push('❤️ ✓');
-  badge.textContent = parts.join(' /');
+  badge.textContent = parts.join('  '); // plain spaces collapse to one in HTML rendering — NBSPs actually show as a gap
 }
 function setAiToggleBadge(kiShort){
   aiStatusShort = kiShort;
