@@ -2153,6 +2153,12 @@ function startExam(){
     selfGrade: new Map(), // id -> true/false (open questions review)
     aiFeedback: new Map(), // id -> {feedback, error} from AI grading
     cheatRevealed: new Set(), // id -> Cheat-Modus result already revealed for this question
+    // id -> an auto-grade call is currently in flight for this question. Only
+    // guards maybeAutoGradeCheat's own re-entrancy — it gets called again on
+    // every render of an already-revealed question (e.g. navigating back to
+    // it), and without this a first call still waiting on Gemini would let a
+    // second one start, racing two independent verdicts for the same answer.
+    cheatAutoGradeInFlight: new Set(),
     aiAutoRan: false,
     aiGradingRunning: false,
     aiGradingCancelRequested: false, // set when the bulk-grade button is clicked again mid-run — see runBulkAiGrade
@@ -2723,6 +2729,17 @@ function maybeAutoGradeCheat(q){
   if(q.type === 'mc' || !getAiKey() || !hasOpenAnswer(q)) return;
   const fb = session.aiFeedback.get(q.id);
   if(fb && (fb.feedback || fb.error)) return;
+  // This function re-runs on every render of an already-revealed question
+  // (e.g. navigating back to it) — the guard above only catches a FINISHED
+  // result, so without this, navigating away and back while the first call
+  // is still waiting on Gemini would start a second, fully independent
+  // grading call for the same question. Two real verdicts then race: e.g.
+  // "correct" (no explanation shown, per the sg!==true check above) lands
+  // first, then the second call's verdict — possibly "falsch" with a genuine
+  // explanation — overwrites it moments later. Guarded per-question (not
+  // globally) so grading a different question at the same time is unaffected.
+  if(session.cheatAutoGradeInFlight.has(q.id)) return;
+  session.cheatAutoGradeInFlight.add(q.id);
   const mySession = session;
   // Same node-identity guard as wireCheatAiBtn — this fires automatically on
   // reveal with no user click to gate it, so it's actually the more likely
@@ -2732,6 +2749,7 @@ function maybeAutoGradeCheat(q){
   // already exists, and without this check would silently overwrite it.
   const cheatPanelEl = document.getElementById('cheat-panel');
   runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_EXAM_MS, {slowMode: mySession.examRateLimitSeen}).then(()=>{
+    mySession.cheatAutoGradeInFlight.delete(q.id);
     if(session !== mySession) return; // a new exam was started meanwhile
     if(document.getElementById('cheat-panel') !== cheatPanelEl) return; // question changed meanwhile
     reRenderCheatSlot(q);
