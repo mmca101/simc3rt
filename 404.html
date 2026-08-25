@@ -2543,11 +2543,12 @@ function cheatResultBody(q){
   const sg = session.selfGrade.get(q.id); // set by AI grading or manual self-grade below
   let fbHtml = '';
   if(fb && fb.feedback){
-    // "✓ Richtig" already says everything a correct verdict needs — the
-    // written reasoning only earns its space when something needs explaining.
-    if(sg !== true){
-      fbHtml = `<div class="ai-feedback wrong"><strong>KI-Einschätzung:</strong> ${renderMarkdownSafe(fb.feedback)}</div>`;
-    }
+    // The model already generates this reasoning regardless of verdict (the
+    // JSON schema always asks for "feedback"), so showing it for a correct
+    // answer costs nothing extra — .ai-feedback.correct (green) vs .wrong
+    // (red) keeps it visually distinct from a correction rather than
+    // reading like one.
+    fbHtml = `<div class="ai-feedback ${sg===true?'correct':'wrong'}"><strong>KI-Einschätzung:</strong> ${renderMarkdownSafe(fb.feedback)}</div>`;
   } else if(fb && fb.error){
     fbHtml = `<div class="ai-feedback error"><strong>KI-Bewertung fehlgeschlagen:</strong> ${escapeHtml(fb.error)}</div>`;
   }
@@ -3550,7 +3551,9 @@ function renderReviewItem(q, idx){
             : '<span class="tag pending">Noch nicht bewertet</span>';
     let fbHtml = '';
     if(fb && fb.feedback){
-      fbHtml = `<div class="ai-feedback"><strong>KI-Einschätzung:</strong> ${renderMarkdownSafe(fb.feedback)}</div>`;
+      // Same correct/wrong-tinted treatment as the Cheat-Modus panel — was
+      // already shown for both verdicts here, just without the color cue.
+      fbHtml = `<div class="ai-feedback ${sg===true?'correct':'wrong'}"><strong>KI-Einschätzung:</strong> ${renderMarkdownSafe(fb.feedback)}</div>`;
     } else if(fb && fb.error){
       fbHtml = `<div class="ai-feedback error"><strong>KI-Bewertung fehlgeschlagen:</strong> ${escapeHtml(fb.error)}</div>`;
     }
