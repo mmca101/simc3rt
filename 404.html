@@ -2577,8 +2577,17 @@ function cheatResultBody(q){
       </div>`;
     } else if(fb && fb.feedback){
       actionHtml = `<button class="btn btn-cheat ai-grade-btn" id="cheat-ai-btn" style="margin-top:10px">🔁 Neu bewerten (nach Überarbeitung)</button>`;
-    } else if(hasOpenAnswer(q)){
+    } else if(session.cheatAutoGradeInFlight.has(q.id)){
       actionHtml = '<div class="rowval" style="margin-top:8px;color:var(--muted)">⏳ Wird von der KI bewertet…</div>';
+    } else {
+      // No verdict yet and no auto-grade actually running (maybeAutoGradeCheat
+      // skips entirely when !hasOpenAnswer(q), so that's never in flight for
+      // an unanswered question) — previously fell through to no button at
+      // all here whenever hasOpenAnswer(q) was false, leaving no way to
+      // trigger grading without navigating away and back. wireCheatAiBtn's
+      // click handler saves whatever's currently in the textarea before
+      // grading, so this button works fine even if nothing's been typed yet.
+      actionHtml = `<button class="btn btn-cheat ai-grade-btn" id="cheat-ai-btn" style="margin-top:10px">🔎 Mit KI bewerten</button>`;
     }
   } else {
     actionHtml = `<div class="self-grade-btns" id="cheat-self-grade-btns" style="margin-top:10px">
