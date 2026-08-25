@@ -1104,6 +1104,27 @@ function scheduleReformat(rawText, targetEl, timeoutMs){
 // breaking changes), so this doesn't need to be manually bumped every time
 // a specific dated model version (e.g. gemini-2.0-flash) gets retired.
 async function aiGradeOpenQuestion(q, candidateText, timeoutMs, opts){
+  // Live-tested failure: "Wie können Sie die Projektdauer verkürzen? Nennen
+  // Sie zwei Möglichkeiten." — Musterantwort elaborates each method with a
+  // full sentence ("Crashing: zusätzliche Ressourcen einsetzen, um..."), and
+  // the candidate answer "Crashing and Fast Tracking" (naming both methods,
+  // no elaboration) was marked falsch: "nennt zwar die zwei korrekten
+  // Methoden, erklärt diese jedoch nicht wie in der Musterantwort gefordert."
+  // The model was matching against the Musterantwort's OWN depth rather than
+  // what the question's verb actually asked for — "Nennen" only asks to name
+  // them. A Musterantwort elaborating for the reader's benefit doesn't raise
+  // what the question demands. Scoped to the question's own wording (not
+  // length/complexity), and applied to BOTH grading paths below — which verb
+  // the question uses is a fact about the question's format, not a matter of
+  // how lenient/strict the grading calibration should be, so it belongs
+  // above that split rather than only in the friendly path.
+  const verbGuidance = 'Beachte das Verb in der Frage: Verlangt die Frage nur eine Nennung oder Aufzählung (z. B. ' +
+    '"Nennen Sie ...", ohne zusätzliches "Beschreiben", "Erklären", "Erläutern", "Begründen" oder "Geben Sie ein ' +
+    'Beispiel"), genügt die korrekte Nennung der geforderten Begriffe oder Fakten allein als vollständige, richtige ' +
+    'Antwort — auch wenn die Musterantwort zusätzliche Erklärungen enthält. Solche Erklärungen in der Musterantwort ' +
+    'dienen nur dem Verständnis und sind KEINE Voraussetzung für "richtig", wenn die Frage sie nicht ausdrücklich ' +
+    'verlangt. Verlangt die Frage dagegen explizit eine Beschreibung, Erklärung, Erläuterung, Begründung oder ein ' +
+    'Beispiel, reicht die reine Nennung der Begriffe ohne diesen Zusatz nicht aus.\n';
   // "Faire KI-Bewertung" unchecked (or forced off by "Prüfung starten" for an
   // unbiased simulation, see session.friendlyGrading) falls back to the
   // original, pre-fairness-gradient prompt: strict textual/content matching,
@@ -1115,6 +1136,7 @@ async function aiGradeOpenQuestion(q, candidateText, timeoutMs, opts){
     const strongPrompt = 'Du bist Prüfer/in für die GPM Basiszertifikat-Prüfung im Projektmanagement (ICB4).\n' +
       'Bewerte, ob die Antwort des Kandidaten inhaltlich der Musterantwort entspricht. Die Kernaussagen müssen ' +
       'stimmen, eine wortgleiche Formulierung ist nicht nötig. Sei bei der Bewertung fair, aber nicht nachlässig.\n\n' +
+      verbGuidance + '\n' +
       'Frage: ' + q.stem + '\n\n' +
       'Musterantwort: ' + q.answer + '\n' +
       (q.info ? ('Zusatzinfo: ' + q.info + '\n') : '') +
@@ -1235,7 +1257,7 @@ async function aiGradeOpenQuestion(q, candidateText, timeoutMs, opts){
     'oberflächliche, nur thematisch angrenzende oder inhaltlich falsche Antworten durchgewunken werden — bleib bei ' +
     'eindeutig fehlendem oder falschem Kernverständnis konsequent bei "falsch". Sei insgesamt fair, aber nicht ' +
     'nachlässig.\n' +
-    slashGuidance + complexityGuidance + pspSpecialCase + '\n' +
+    verbGuidance + slashGuidance + complexityGuidance + pspSpecialCase + '\n' +
     'Frage: ' + q.stem + '\n\n' +
     'Musterantwort: ' + q.answer + '\n' +
     (q.info ? ('Zusatzinfo: ' + q.info + '\n') : '') +
