@@ -2107,6 +2107,15 @@ function startExam(){
     // "exam true" mode (default): ALL Multiple/Single-Choice questions form one
     // bundle at the very start of the exam, across every domain, followed by
     // one bundle of all open questions — matching the real portal's ordering.
+    // Within that skeleton, takeMcOpenForDomain already picks WHICH questions
+    // via shuffle()/prioritizeByMemory, but stitches each KE's slice onto the
+    // next in fixed KE order — so a domain's block was always "all of KE1,
+    // then all of KE2, ...", never interleaved. Shuffled again here, per
+    // group, right before display: allMc as one pass (it renders as a single
+    // flat "Checkboxfragen" group in the sidebar, no domain sub-boundary to
+    // respect), each domain's open[] separately (those DO stay visually
+    // distinct Kompetenzbereich groups — shuffling the merged allOpen instead
+    // would mix questions across domain group boundaries).
     let allMc = [];
     let allOpen = [];
     for(const domain of DOMAIN_ORDER){
@@ -2114,9 +2123,9 @@ function startExam(){
       if(!domainKeys) continue;
       const {mc, open} = takeMcOpenForDomain(domainKeys);
       allMc = allMc.concat(mc);
-      allOpen = allOpen.concat(open);
+      allOpen = allOpen.concat(shuffle(open));
     }
-    selected = allMc.concat(allOpen);
+    selected = shuffle(allMc).concat(allOpen);
   } else {
     // Training mode: MC and open questions are mixed randomly within each
     // domain group instead of bundled, for variety.
@@ -2662,6 +2671,15 @@ function wireCheatAiBtn(q){
       }
       saveCurrentAnswer();
       const mySession = session;
+      // reRenderCheatSlot(q) below overwrites whatever #cheat-panel node is
+      // CURRENTLY in the DOM with content for THIS captured q — if the user
+      // has since navigated to a different question (a fresh #cheat-panel,
+      // same id, different node), that would silently paint this question's
+      // result into the new one. session!==mySession only catches a whole
+      // new exam starting, not a same-exam question navigation — so the
+      // node itself is captured here and compared by identity below, same
+      // pattern already used for the reveal-button's own delayed render.
+      const cheatPanelEl = document.getElementById('cheat-panel');
       cancelToken = {cancelled: false};
       // Deliberately left enabled (not disabled) — see the cancel branch above.
       cheatAiBtn.textContent = 'Wird bewertet…';
@@ -2669,6 +2687,7 @@ function wireCheatAiBtn(q){
       await runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_EXAM_MS, {slowMode: mySession.examRateLimitSeen, onStatus, cancelToken});
       cancelToken = null;
       if(session !== mySession) return; // a new exam was started meanwhile
+      if(document.getElementById('cheat-panel') !== cheatPanelEl) return; // question changed meanwhile
       reRenderCheatSlot(q);
       refreshCircleStates();
     });
@@ -2705,8 +2724,16 @@ function maybeAutoGradeCheat(q){
   const fb = session.aiFeedback.get(q.id);
   if(fb && (fb.feedback || fb.error)) return;
   const mySession = session;
+  // Same node-identity guard as wireCheatAiBtn — this fires automatically on
+  // reveal with no user click to gate it, so it's actually the more likely
+  // way a previous question's result ends up painted onto the next one: reveal
+  // Q1 (kicks off auto-grade), navigate to Q2 before it resolves, reveal Q2
+  // (kicks off its own auto-grade) — Q1's response can land after Q2's panel
+  // already exists, and without this check would silently overwrite it.
+  const cheatPanelEl = document.getElementById('cheat-panel');
   runAiGradeQuestion(mySession, q, GEMINI_TIMEOUT_EXAM_MS, {slowMode: mySession.examRateLimitSeen}).then(()=>{
     if(session !== mySession) return; // a new exam was started meanwhile
+    if(document.getElementById('cheat-panel') !== cheatPanelEl) return; // question changed meanwhile
     reRenderCheatSlot(q);
     refreshCircleStates();
   });
