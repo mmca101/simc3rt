@@ -2107,6 +2107,15 @@ function startExam(){
     // "exam true" mode (default): ALL Multiple/Single-Choice questions form one
     // bundle at the very start of the exam, across every domain, followed by
     // one bundle of all open questions — matching the real portal's ordering.
+    // Within that skeleton, takeMcOpenForDomain already picks WHICH questions
+    // via shuffle()/prioritizeByMemory, but stitches each KE's slice onto the
+    // next in fixed KE order — so a domain's block was always "all of KE1,
+    // then all of KE2, ...", never interleaved. Shuffled again here, per
+    // group, right before display: allMc as one pass (it renders as a single
+    // flat "Checkboxfragen" group in the sidebar, no domain sub-boundary to
+    // respect), each domain's open[] separately (those DO stay visually
+    // distinct Kompetenzbereich groups — shuffling the merged allOpen instead
+    // would mix questions across domain group boundaries).
     let allMc = [];
     let allOpen = [];
     for(const domain of DOMAIN_ORDER){
@@ -2114,9 +2123,9 @@ function startExam(){
       if(!domainKeys) continue;
       const {mc, open} = takeMcOpenForDomain(domainKeys);
       allMc = allMc.concat(mc);
-      allOpen = allOpen.concat(open);
+      allOpen = allOpen.concat(shuffle(open));
     }
-    selected = allMc.concat(allOpen);
+    selected = shuffle(allMc).concat(allOpen);
   } else {
     // Training mode: MC and open questions are mixed randomly within each
     // domain group instead of bundled, for variety.
