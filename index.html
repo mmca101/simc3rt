@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="SiM-C3RT">
-<title>SiM-C3RT v1.4</title>
+<title>SiM-C3RT v1.5</title>
 <!-- Link-sharing preview (Discord, WhatsApp, Slack, iMessage, etc.) — needs
      an absolute image URL, not a relative path, for external crawlers to
      resolve it correctly regardless of where the link was shared from. -->
@@ -221,6 +221,7 @@ input[type=range]{accent-color:var(--blue)}
 .q-stem{background:var(--card);border-radius:var(--radius);padding:18px 20px;font-size:15px;line-height:1.6;white-space:pre-wrap;box-shadow:0 1px 3px rgba(0,0,0,.06);margin-bottom:20px}
 .mc-hint{color:var(--muted);font-size:12.5px;margin-bottom:10px}
 .cheat-panel{margin-top:20px;padding:14px 16px;background:#fff6e9;border:1px dashed var(--amber);border-radius:8px}
+.cheat-panel .ke-item{gap:14px}
 .cheat-panel .cheat-label{font-size:11.5px;font-weight:700;color:var(--amber-d);text-transform:uppercase;letter-spacing:.3px}
 .cheat-panel #cheat-result{margin-top:6px;font-size:13.5px;color:var(--text)}
 .cheat-panel.slim{padding:10px 16px;display:flex;align-items:center;gap:5px;opacity:.55;transition:opacity .15s}
@@ -469,9 +470,13 @@ input[type=range]{accent-color:var(--blue)}
             abgeglichen und abgeschätzt werden!
           </div>
           <div class="cheat-panel" style="margin-bottom:0">
-            <label class="ke-item" style="margin-top:0">
+            <label class="ke-item" style="margin-top:0" id="friendly-grading-wrap">
+              <input type="checkbox" id="cfg-friendly-grading" checked>
+              <span>Großzügigere KI-Bewertung<br><span class="badge-note">Freitext-Antworten werden wie von einem menschlich großzügigen Prüfer bewertet. Bei "Prüfung starten" wird diese Option für eine unverfälschte Simulation automatisch deaktiviert.</span></span>
+            </label>
+            <label class="ke-item" style="margin-top:10px">
               <input type="checkbox" id="cfg-cheat-mode">
-              <span>Zusätzlich Übungs-Modus aktivieren<br><span class="badge-note">Zeigt Musterantwort/richtige Antwort direkt auf jeder Fragenseite, statt erst im Ergebnis. Blendet außerdem eine Pause-Schaltfläche unten links ein, mit der sich der Timer während der Prüfung anhalten und fortsetzen lässt.</span></span>
+              <span>Übungs-Modus<br><span class="badge-note">Zeigt Musterantwort/richtige Antwort direkt auf jeder Fragenseite, statt erst im Ergebnis. Blendet außerdem eine Pause-Schaltfläche unten links ein, mit der sich der Timer während der Prüfung anhalten und fortsetzen lässt.</span></span>
             </label>
           </div>
         </div>
@@ -602,7 +607,7 @@ input[type=range]{accent-color:var(--blue)}
       </svg>
       <span>mmca101/simc3rt</span>
     </a>
-    <span class="version-badge">v1.4</span>
+    <span class="version-badge">v1.5</span>
   </div>
 </div>
 
@@ -614,7 +619,7 @@ input[type=range]{accent-color:var(--blue)}
         <path d="M3 5h14M3 10h14M3 15h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
       </svg>
     </button>
-    <span class="version-badge topbar-version">v1.4</span>
+    <span class="version-badge topbar-version">v1.5</span>
     <div class="brand">SiM-C3RT</div>
     <div class="timer" id="timer-display">90:00</div>
     <button class="end-btn" id="end-exam-btn">PRÜFUNG BEENDEN</button>
@@ -742,11 +747,21 @@ const manualGradingNote = document.getElementById('manual-grading-note');
 // grading call revealed the key stopped working — never just because a
 // string happens to sit in localStorage.
 let aiStatusShort = 'KI';
+// Only shows what's actually active — a bare "KI" (no key entered) is as
+// inactive as an unchecked toggle and stays hidden just like one; "KI …"
+// and "KI ✗" are still shown despite not being a success state, since
+// those carry information (checking / broken key) the plain absence of a
+// key doesn't.
 function updateToggleBadge(){
   const badge = document.getElementById('ai-toggle-badge');
   if(!badge) return;
   const cheatOn = document.getElementById('cfg-cheat-mode')?.checked;
-  badge.textContent = aiStatusShort + ' / Cheats' + (cheatOn ? ' ✓' : '');
+  const friendlyOn = document.getElementById('cfg-friendly-grading')?.checked;
+  const parts = [];
+  if(aiStatusShort !== 'KI') parts.push(aiStatusShort);
+  if(cheatOn) parts.push('🔎 ✓');
+  if(friendlyOn) parts.push('❤️ ✓');
+  badge.textContent = parts.join(' /');
 }
 function setAiToggleBadge(kiShort){
   aiStatusShort = kiShort;
@@ -1089,9 +1104,138 @@ function scheduleReformat(rawText, targetEl, timeoutMs){
 // breaking changes), so this doesn't need to be manually bumped every time
 // a specific dated model version (e.g. gemini-2.0-flash) gets retired.
 async function aiGradeOpenQuestion(q, candidateText, timeoutMs, opts){
+  // "Faire KI-Bewertung" unchecked (or forced off by "Prüfung starten" for an
+  // unbiased simulation, see session.friendlyGrading) falls back to the
+  // original, pre-fairness-gradient prompt: strict textual/content matching,
+  // none of the length/complexity leniency calibrated elsewhere in this
+  // function. Kept deliberately separate rather than threading a strictness
+  // flag through every guidance string below, so this path can't accidentally
+  // inherit future changes to the friendly-grading calibration.
+  if(opts && opts.friendlyGrading === false){
+    const strongPrompt = 'Du bist Prüfer/in für die GPM Basiszertifikat-Prüfung im Projektmanagement (ICB4).\n' +
+      'Bewerte, ob die Antwort des Kandidaten inhaltlich der Musterantwort entspricht. Die Kernaussagen müssen ' +
+      'stimmen, eine wortgleiche Formulierung ist nicht nötig. Sei bei der Bewertung fair, aber nicht nachlässig.\n\n' +
+      'Frage: ' + q.stem + '\n\n' +
+      'Musterantwort: ' + q.answer + '\n' +
+      (q.info ? ('Zusatzinfo: ' + q.info + '\n') : '') +
+      '\nAntwort des Kandidaten: ' + (candidateText || '(keine Antwort abgegeben)') +
+      '\n\nAntworte AUSSCHLIESSLICH mit kompaktem JSON, ohne Markdown-Codeblock, in diesem Format:\n' +
+      '{"correct": true oder false, "feedback": "ein bis zwei Sätze Begründung auf Deutsch"}';
+    const strongText = await callGeminiApi(strongPrompt, timeoutMs, opts);
+    const strongCleaned = strongText.replace(/```json/gi, '').replace(/```/g, '').trim();
+    let strongParsed;
+    try{ strongParsed = JSON.parse(strongCleaned); }
+    catch(e){ throw new Error('Antwort der KI konnte nicht gelesen werden.'); }
+    return {correct: !!strongParsed.correct, feedback: String(strongParsed.feedback || '').trim()};
+  }
+  // Some Musterantworten mark acceptable alternative terms/phrasings with a
+  // "/" (spaced or on its own line, e.g. "Auftraggeber / Kunde") — without
+  // this instruction the model tends to read the whole text either side of
+  // the slash as ONE required combined answer instead of either side being
+  // independently acceptable.
+  const slashGuidance = 'Enthält die Musterantwort einen Schrägstrich (/) — umgeben von Leerzeichen oder als ' +
+    'Zeilenumbruch — kennzeichnet dieser akzeptable alternative Begriffe oder Formulierungen (z. B. "Auftraggeber / ' +
+    'Kunde" heißt: beide Varianten sind einzeln richtig, nicht dass beide genannt werden müssen). Werte eine solche ' +
+    'Trennung nicht so, als sei der gesamte Text eine einzige zusammenhängende Pflichtantwort.\n';
+  // A 3-band cutoff still collapsed too many different Musterantworten into
+  // the same treatment — a continuous 1-10 level gives the model finer
+  // resolution to calibrate against. The "/" alternative-answer marker (see
+  // slashGuidance above) would otherwise inflate this: a short Musterantwort
+  // offering 2-3 alternative phrasings of the SAME short answer isn't a long
+  // combined answer, so only the primary alternative counts toward length.
+  // Some Musterantworten mark equivalent full alternative answers with
+  // "AUCH eine gültige Antwort" / "Alternativ(e)/Alternativantwort:" instead
+  // of "/" — same principle, only the primary answer before that marker
+  // counts. NOT gated on the presence of lettered options alone: real
+  // Single-Choice Musterantworten are just "B) ..." with no such marker
+  // phrase, so they're untouched by this and still count in full.
+  function representativeAnswerForComplexity(answer){
+    const slashBlock = answer.split(/\n\s*\/\s*\n/)[0];
+    const altMarker = slashBlock.match(/AUCH eine (?:gültige|richtige|andere) Antwort|Alternativantwort|Alternative?:/i);
+    const primaryBlock = altMarker ? slashBlock.slice(0, altMarker.index) : slashBlock;
+    return primaryBlock.replace(/ \/ \S+/g, '');
+  }
+  const complexityBasis = representativeAnswerForComplexity(q.answer);
+  const wordCount = (complexityBasis.match(/\S+/g) || []).length;
+  const complexityScore = complexityBasis.length * wordCount;
+  // Linear /2000 steps saturate fast on this question set's real distribution
+  // (334 real Musterantworten checked: ~80 of them already exceed the level-10
+  // cutoff, most by a large multiple, one extreme outlier over 1M). Above the
+  // linear range, switch to log-spaced steps anchored to the ~90th percentile
+  // of that long tail (not the true max) so the one extreme outlier doesn't
+  // compress everyone else's band into level 11; anything past the anchor
+  // just clamps to the top level, same as the low end already does.
+  const LINEAR_MAX_SCORE = 20000;
+  const LOG_TAIL_ANCHOR = 130000;
+  const EXTRA_LOG_LEVELS = 3;
+  const MAX_LEVEL = 10 + EXTRA_LOG_LEVELS;
+  let complexityLevel;
+  if (complexityScore <= LINEAR_MAX_SCORE) {
+    complexityLevel = Math.min(10, Math.max(1, Math.round(complexityScore / 2000)));
+  } else {
+    const perLevelMultiplier = Math.pow(LOG_TAIL_ANCHOR / LINEAR_MAX_SCORE, 1 / EXTRA_LOG_LEVELS);
+    const extra = Math.ceil(Math.log(complexityScore / LINEAR_MAX_SCORE) / Math.log(perLevelMultiplier));
+    complexityLevel = Math.min(MAX_LEVEL, 10 + Math.max(1, extra));
+  }
+  // A source citation ("Dittmann ...", "Siehe ... Seite ...") or an embedded
+  // arithmetic formula ("=") pads length/word-count without indicating real
+  // leeway for the candidate — neither is something they're expected to
+  // reproduce or that should be graded loosely. A flat -1 is a deliberately
+  // simple correction rather than trying to model exactly how much text
+  // either one adds; both trigger the same single-step correction (not
+  // stacked) if a Musterantwort happens to contain both.
+  const hasCitation = /Dittmann|Siehe[^\n]*Seite/i.test(q.answer);
+  const hasFormula = /=/.test(q.answer);
+  if (hasCitation || hasFormula) complexityLevel = Math.max(1, complexityLevel - 1);
+  const complexityGuidance = 'Kritikalitäts-Level dieser Musterantwort: ' + complexityLevel + ' von ' + MAX_LEVEL +
+    ' (berechnet aus Zeichenzahl × Wortanzahl der primären Musterantwort ohne alternative "/"-Formulierungen: ' +
+    complexityBasis.length + ' × ' + wordCount + ' = ' + complexityScore + '). 1 bedeutet sehr kurz/einfach — bewerte ' +
+    'hier sehr kritisch/streng, enger Wortabgleich. ' + MAX_LEVEL + ' bedeutet extrem lang/komplex — bewerte hier ' +
+    'maximal großzügig, nur die semantische Gesamtaussage zählt statt vollständiger Abdeckung. Nutze dieses Level als ' +
+    'feine Kalibrierung der oben beschriebenen Gleitskala, statt grob in wenige Stufen zu denken.\n' +
+    'WICHTIG dabei: Besteht die Musterantwort aus mehreren klar benannten/gelabelten Teilpunkten (z. B. mehrere ' +
+    'Begriffe mit je eigener Definition), darf Großzügigkeit NICHT dazu führen, dass ein einzelner Teilpunkt durch ' +
+    'einen inhaltlich falschen Begriff ersetzt wird — jeder benannte Teilpunkt muss für sich inhaltlich stimmen, ' +
+    'auch wenn Anzahl und Struktur der genannten Punkte insgesamt passen.\n';
+  // Known, confirmed-broken outlier: this specific question's grading was
+  // live-tested to accept a wrong defining criterion (e.g. "Ressourcen"
+  // swapped in for "Funktionen") as long as the three category labels
+  // themselves were present, unaffected by the general instruction above.
+  // Two structurally similar cross-checks (Anordnungsbeziehungen,
+  // FAZ/FEZ/SAZ/SEZ) came back clean under the general instruction, so this
+  // doesn't look systemic enough to justify a broader mechanism (a forced
+  // per-point JSON breakdown was tried and didn't fix it either, see git
+  // history) — a narrow, question-specific patch, verified live to fix the
+  // confirmed failure, is cheaper than chasing a general fix for a
+  // one-question problem.
+  const pspSpecialCase = /PSP-Gliederungsarten/i.test(q.stem)
+    ? 'SPEZIALHINWEIS für diese Frage: Die drei Gliederungsarten unterscheiden sich jeweils durch genau EIN ' +
+      'definierendes Kriterium: objektorientiert = nach Produkten/Komponenten/Objekten, funktionsorientiert = nach ' +
+      'Funktionen/Verrichtungen/Aufgabenbereichen, phasenorientiert = nach zeitlichen Abläufen/Phasen. Prüfe für ' +
+      'jede genannte Gliederungsart explizit, ob GENAU dieses Kriterium (nicht ein benachbarter, aber inhaltlich ' +
+      'anderer Begriff wie "Ressourcen" statt "Funktionen" oder "Kunden" statt "Produkte") korrekt wiedergegeben ' +
+      'wurde — ein falsches Kriterium macht diesen Teilpunkt falsch, selbst wenn der Name der Gliederungsart selbst ' +
+      'richtig genannt wurde und die übrigen zwei Gliederungsarten stimmen.\n'
+    : '';
   const prompt = 'Du bist Prüfer/in für die GPM Basiszertifikat-Prüfung im Projektmanagement (ICB4).\n' +
-    'Bewerte, ob die Antwort des Kandidaten inhaltlich der Musterantwort entspricht. Die Kernaussagen müssen ' +
-    'stimmen, eine wortgleiche Formulierung ist nicht nötig. Sei bei der Bewertung fair, aber nicht nachlässig.\n\n' +
+    'Bewerte, ob die Antwort des Kandidaten inhaltlich der Musterantwort entspricht — urteile wie ein fairer, mäßig ' +
+    'großzügiger menschlicher Prüfer, nicht wie ein exakter Textabgleich. Erwarte NIEMALS eine wortwörtliche ' +
+    'Übereinstimmung — akzeptiere die eigene Formulierung und Interpretation des Kandidaten, solange sie inhaltlich ' +
+    '(semantisch) richtig ist.\n' +
+    'Als Faustregel gilt dabei eine Gleitskala je nach Länge UND Komplexität der Musterantwort (Komplexität = Anzahl ' +
+    'enthaltener Teilaspekte/Kriterien, nicht nur Zeichenzahl):\n' +
+    '- Je kürzer und einfacher sie ist (z. B. ein einzelner Fachbegriff oder eine kurze Tatsache), desto enger sollte ' +
+    'die inhaltliche Übereinstimmung sein und desto weniger Großzügigkeit ist angebracht — hier gibt es wenig ' +
+    'Spielraum für gleichwertige Umformulierungen.\n' +
+    '- Je länger und komplexer die Musterantwort (mehrere Teilaspekte, Kriterien oder Beispiele), desto stärker ' +
+    'zählt die semantische Gesamtaussage statt vollständiger Abdeckung aller Details — UND desto großzügiger darfst ' +
+    'du sein: Ist die Kernidee klar richtig verstanden und nur ein einzelnes Detail (z. B. ein schwaches Beispiel) ' +
+    'unsauber, werte die Antwort trotzdem noch als richtig.\n' +
+    'Da dies ein Übungstool zur Prüfungsvorbereitung ist, darf diese Großzügigkeit nicht dazu führen, dass ' +
+    'oberflächliche, nur thematisch angrenzende oder inhaltlich falsche Antworten durchgewunken werden — bleib bei ' +
+    'eindeutig fehlendem oder falschem Kernverständnis konsequent bei "falsch". Sei insgesamt fair, aber nicht ' +
+    'nachlässig.\n' +
+    slashGuidance + complexityGuidance + pspSpecialCase + '\n' +
     'Frage: ' + q.stem + '\n\n' +
     'Musterantwort: ' + q.answer + '\n' +
     (q.info ? ('Zusatzinfo: ' + q.info + '\n') : '') +
@@ -1327,6 +1471,7 @@ function persistConfig(){
       focusType: focusSlider.value,
       mcFirst: document.getElementById('cfg-mc-first').checked,
       cheatMode: document.getElementById('cfg-cheat-mode').checked,
+      friendlyGrading: document.getElementById('cfg-friendly-grading').checked,
       showProgressOnStart: document.getElementById('cfg-show-progress-start').checked,
       keKeys: selectedKEKeys()
     };
@@ -1369,6 +1514,8 @@ function updateShareableUrl(){
 
   if(document.getElementById('cfg-cheat-mode').checked) params.set('cheat', '1');
 
+  if(!document.getElementById('cfg-friendly-grading').checked) params.set('fg', '0');
+
   if(KE_LIST.length > 0){
     const selected = selectedKEKeys();
     if(selected.length !== KE_LIST.length) params.set('ke', selected.join(','));
@@ -1402,11 +1549,14 @@ function applySavedScalarFields(){
   const mcFirst = mcfParam !== null ? (mcfParam === '1') : cfg.mcFirst;
   const cheatParam = params.get('cheat');
   const cheatMode = cheatParam !== null ? (cheatParam === '1') : cfg.cheatMode;
+  const fgParam = params.get('fg');
+  const friendlyGrading = fgParam !== null ? (fgParam === '1') : cfg.friendlyGrading;
   if(count) document.getElementById('cfg-count').value = count;
   if(time) document.getElementById('cfg-time').value = time;
   if(focusType) focusSlider.value = focusType;
   if(typeof mcFirst === 'boolean') document.getElementById('cfg-mc-first').checked = mcFirst;
   if(typeof cheatMode === 'boolean') document.getElementById('cfg-cheat-mode').checked = cheatMode;
+  if(typeof friendlyGrading === 'boolean') document.getElementById('cfg-friendly-grading').checked = friendlyGrading;
   if(typeof cfg.showProgressOnStart === 'boolean') document.getElementById('cfg-show-progress-start').checked = cfg.showProgressOnStart;
 }
 function applySavedKeSelection(){
@@ -1783,6 +1933,7 @@ function updateFocusLabel(){
 focusSlider.addEventListener('input', ()=>{ updateFocusLabel(); persistConfig(); });
 document.getElementById('cfg-mc-first').addEventListener('change', persistConfig);
 document.getElementById('cfg-cheat-mode').addEventListener('change', ()=>{ persistConfig(); updateToggleBadge(); });
+document.getElementById('cfg-friendly-grading').addEventListener('change', ()=>{ persistConfig(); updateToggleBadge(); });
 updateFocusLabel();
 
 // Restore previously-saved count/time/name/focus-type now that every field
@@ -1828,13 +1979,14 @@ document.getElementById('cfg-reset-btn').addEventListener('click', ()=>{
   const timeEl = document.getElementById('cfg-time');
   const mcFirstEl = document.getElementById('cfg-mc-first');
   const cheatEl = document.getElementById('cfg-cheat-mode');
+  const friendlyGradingEl = document.getElementById('cfg-friendly-grading');
   const memoryEl = document.getElementById('cfg-use-memory');
   const checkboxes = Array.from(grid.querySelectorAll('input[type=checkbox]'));
   const weightInputs = Array.from(grid.querySelectorAll('.ke-weight-input'));
 
   const snapshot = {
     count: countEl.value, time: timeEl.value, focus: focusSlider.value,
-    mcFirst: mcFirstEl.checked, cheat: cheatEl.checked, memory: memoryEl.checked,
+    mcFirst: mcFirstEl.checked, cheat: cheatEl.checked, friendlyGrading: friendlyGradingEl.checked, memory: memoryEl.checked,
     keChecked: checkboxes.map(el => el.checked),
     weightValues: weightInputs.map(el => el.value),
     keWeights: new Map(keWeights)
@@ -1845,6 +1997,7 @@ document.getElementById('cfg-reset-btn').addEventListener('click', ()=>{
   focusSlider.value = '19';
   mcFirstEl.checked = true;
   cheatEl.checked = false;
+  friendlyGradingEl.checked = false;
   memoryEl.checked = false;
   checkboxes.forEach(el => el.checked = true);
   applyPruefungsformatWeights();
@@ -1856,6 +2009,7 @@ document.getElementById('cfg-reset-btn').addEventListener('click', ()=>{
   focusSlider.value = snapshot.focus;
   mcFirstEl.checked = snapshot.mcFirst;
   cheatEl.checked = snapshot.cheat;
+  friendlyGradingEl.checked = snapshot.friendlyGrading;
   memoryEl.checked = snapshot.memory;
   checkboxes.forEach((el, i) => el.checked = snapshot.keChecked[i]);
   weightInputs.forEach((el, i) => el.value = snapshot.weightValues[i]);
@@ -1977,6 +2131,13 @@ function startExam(){
   session = {
     questions: selected,
     mcFirst,
+    // Captured once here rather than re-read live at grading time: grading
+    // (Cheat-Modus auto-grade, or the results-screen bulk grade) always
+    // happens after "Prüfung starten"'s synchronous mutate-then-restore
+    // round trip has already put the checkbox back to the user's real saved
+    // value, so a live DOM read at grading time would never actually see
+    // the forced-off state that button intends for an unbiased exam.
+    friendlyGrading: document.getElementById('cfg-friendly-grading').checked,
     answers: new Map(),   // id -> { mc: letter|null, openHtml: string }
     bookmarks: new Set(),
     viewed: new Set(),     // id -> opened at least once, regardless of answer state
@@ -3157,7 +3318,7 @@ async function runAiGradeQuestion(sess, q, timeoutMs, opts){
   try{
     const a = sess.answers.get(q.id);
     const candidateText = a && a.openHtml ? stripHtml(a.openHtml) : '';
-    const result = await aiGradeOpenQuestion(q, candidateText, timeoutMs, opts);
+    const result = await aiGradeOpenQuestion(q, candidateText, timeoutMs, {...(opts || {}), friendlyGrading: sess.friendlyGrading});
     sess.selfGrade.set(q.id, result.correct);
     recordQuestionMemory(q, {correct: result.correct});
     sess.aiFeedback.set(q.id, {feedback: result.feedback, error: null});
