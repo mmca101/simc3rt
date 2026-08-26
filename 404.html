@@ -495,8 +495,8 @@ input[type=range]{accent-color:var(--blue)}
             </div>
             <div class="toolbar-row ke-filter-row" style="margin-bottom:10px">
               <button class="btn-link" data-domain="Kontext">Kontext</button>
-              <button class="btn-link" data-domain="Persönliches und Soziales">Persönliches und Soziales</button>
-              <button class="btn-link" data-domain="Methoden und Technisches">Methoden und Technisches</button>
+              <button class="btn-link" data-domain="Persönliches & Soziales">Persönliches & Soziales</button>
+              <button class="btn-link" data-domain="Methoden & Technisches">Methoden & Technisches</button>
               <button class="btn-link" data-domain="Sonstige">Sonstige</button>
             </div>
             <div class="toolbar-row ke-filter-row" style="margin-bottom:10px">
@@ -717,12 +717,12 @@ function deriveKeData(){
 }
 
 // ---------- ICB4 Kompetenzbereiche (domain grouping for the exam sidebar) ----------
-const DOMAIN_ORDER = ['Kontext', 'Persönliches und Soziales', 'Methoden und Technisches', 'Sonstige'];
+const DOMAIN_ORDER = ['Kontext', 'Persönliches & Soziales', 'Methoden & Technisches', 'Sonstige'];
 function domainForKe(ke){
   if(!ke.code) return 'Sonstige';
   if(ke.code.startsWith('04.03')) return 'Kontext';
-  if(ke.code.startsWith('04.04')) return 'Persönliches und Soziales';
-  if(ke.code.startsWith('04.05')) return 'Methoden und Technisches';
+  if(ke.code.startsWith('04.04')) return 'Persönliches & Soziales';
+  if(ke.code.startsWith('04.05')) return 'Methoden & Technisches';
   return 'Sonstige';
 }
 
@@ -1313,7 +1313,26 @@ function recordQuestionMemory(q, patch){
     // question that currently holds credit (2->1, 1->0); it never touches a
     // question that's never once been correct (that's a plain, non-demoting
     // "answered wrongly" — still ends up red, just not via demotion).
-    if(patch.correct){
+    // A question can get graded more than once in the SAME session — an MC
+    // option changed after already being marked, or a Freitext answer edited
+    // and re-graded (AI or self) after an earlier verdict already adjusted
+    // correctCount. Recomputing via "undo the last delta, apply the new
+    // one" loses information once a clamp (0 or 2) has been hit partway
+    // through — e.g. correct→wrong→correct within one session could settle
+    // on the wrong number. Instead, the BASELINE (whatever correctCount
+    // carried in before this session first touched this question) is
+    // captured once and correctCount is always recomputed fresh from that
+    // same baseline + only the latest verdict, however many times this
+    // question gets re-graded before the session ends. session is
+    // undefined outside an active exam (shouldn't happen here, but the
+    // memory write itself must never depend on it).
+    const sessMem = session && session.memoryVerdictThisSession;
+    if(sessMem){
+      if(!sessMem.has(q.id)) sessMem.set(q.id, {baseline: entry.correctCount || 0});
+      const baseline = sessMem.get(q.id).baseline;
+      entry.correctCount = patch.correct ? Math.min(baseline + 1, 2) : Math.max(baseline - 1, 0);
+      entry.lastWrong = !patch.correct;
+    } else if(patch.correct){
       entry.correctCount = Math.min((entry.correctCount || 0) + 1, 2);
       entry.lastWrong = false;
     } else {
@@ -1645,7 +1664,14 @@ function renderKeGrid(){
     });
   });
   weightsCustomized = false;
-  applyPruefungsformatWeights();
+  // Übungsvorschlag as the real default rather than the flat exam-format
+  // spread: it already falls back to PRUEFUNGSFORMAT_WEIGHTS on its own
+  // (see applyStudyRecommendationWeights) whenever there's no Lerngedächtnis
+  // data yet to differentiate on — either because the source has no ID
+  // column, or because it's a fresh catalog nobody has practiced against —
+  // so this never regresses a first-time user, it only kicks in once there
+  // is real practice history worth steering by.
+  applyStudyRecommendationWeights();
   applySavedKeSelection();
 }
 
@@ -2181,6 +2207,12 @@ function startExam(){
     // it), and without this a first call still waiting on Gemini would let a
     // second one start, racing two independent verdicts for the same answer.
     cheatAutoGradeInFlight: new Set(),
+    // id -> {baseline} — the correctCount Lerngedächtnis carried in the
+    // first time this session graded this question, captured once so a
+    // re-grade after an edited answer (Freitext) or a changed selection
+    // (MC) recomputes cleanly from that same baseline instead of stacking
+    // another +1/-1 on top of an already-adjusted value.
+    memoryVerdictThisSession: new Map(),
     aiAutoRan: false,
     aiGradingRunning: false,
     aiGradingCancelRequested: false, // set when the bulk-grade button is clicked again mid-run — see runBulkAiGrade
@@ -2286,8 +2318,8 @@ function renderOverview(){
     if(mcIdxs.length > 0) appendCircleGroup(container, 'Checkboxfragen', mcIdxs);
   }
 
-  // Kompetenzbereich groups (Kontext / Persönliches und Soziales / Methoden
-  // und Technisches / Sonstige): only the remaining Freitext questions when
+  // Kompetenzbereich groups (Kontext / Persönliches & Soziales / Methoden
+  // & Technisches / Sonstige): only the remaining Freitext questions when
   // mcFirst, otherwise both types mixed, matching the exam's actual order.
   const byDomain = new Map();
   session.questions.forEach((q, idx) => {
@@ -3326,6 +3358,17 @@ function wireResultsEvents(){
         const activeFilter = document.querySelector('#review-filters button.active').dataset.f;
         document.getElementById('screen-results').innerHTML = renderResultsHtml();
         wireResultsEventsPreserveFilter(activeFilter);
+        // finishExam()'s own auto-trigger only ever runs once, at the exact
+        // moment the exam ends — if no key existed yet at that point,
+        // grading never started automatically, and the re-render above just
+        // left the now-available "bewerten" button sitting there requiring
+        // a second, manual click the user has no reason to expect. Mirror
+        // the same auto-trigger here, now that a key actually exists.
+        if(!session.aiAutoRan){
+          session.aiAutoRan = true;
+          const btn = document.getElementById('ai-grade-all-btn');
+          if(btn) runBulkAiGrade(btn);
+        }
       } else {
         saveBtn.disabled = false;
         saveBtn.textContent = 'Speichern & testen';
