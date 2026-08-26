@@ -1788,10 +1788,15 @@ function randomKeFallbackWeight(){ return 2 + Math.floor(Math.random() * 5); } /
 // is in the loaded sheet but NOT in this list" (excluding Sonstige, which
 // belongs to neither) — computed dynamically via isGpmCe/isIpmaOnlyCe below
 // rather than hardcoding a second list, so it stays correct even if a
-// sheet's exact set of non-GPM CE codes changes. Used only to scope the
-// "Basis Test"/"D Test" one-click buttons' own KE selection (see
-// runTrueExam) — general training ("Übung starten") is unaffected and keeps
-// using whatever the user manually selects.
+// sheet's exact set of non-GPM CE codes changes. Confirmed against a real
+// tutor: IPMA-D's question POOL is drawn only from the 14 CEs GPM-B doesn't
+// use — not the full 28-CE catalog (the rules-card's "23/28" figure is a
+// cumulative certification stat spanning both exams, not IPMA-D's own
+// question-pool scope — IPMA-D is an upgrade cert for people who already
+// hold GPM-B, so competency on GPM's 14 is presumed already proven). Used
+// only to scope the "Basis Test"/"D Test" one-click buttons' own KE
+// selection (see runTrueExam) — general training ("Übung starten") is
+// unaffected and keeps using whatever the user manually selects.
 const GPM_CE_CODES = new Set([
   '04.03.01', '04.03.02', '04.03.04', '04.04.03', '04.05.01', '04.05.02',
   '04.05.03', '04.05.04', '04.05.05', '04.05.07', '04.05.08', '04.05.10',
