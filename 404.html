@@ -391,23 +391,47 @@ input[type=range]{accent-color:var(--blue)}
 .browse-filter-checkbox{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--text);cursor:pointer}
 .browse-group{margin-bottom:10px}
 .browse-group-body{display:flex;flex-direction:column;gap:8px}
-.browse-item summary{gap:9px}
-/* The outer KE group's own arrow marker (.config-section summary::after)
-   is enough disclosure affordance for the page — the per-question card's
-   own ▸/▾ marker is dropped so the mastery-status dot is the only marker
-   on the left, taking that visual slot instead of sitting beside it. */
-.browse-item summary::before{content:none}
-.browse-item .browse-stem{font-weight:700}
-/* .config-section summary span:first-child (used for the outer KE-group
-   header) unintentionally also matches this dot, since browse-item cards
-   sit nested inside a .config-section's body — needs to out-specificity
-   that rule to keep its own flex:0 0 auto/size instead of being stretched
-   into a full-width bar. */
-.review-item.browse-item summary .mastery-dot{flex:0 0 auto;width:10px;height:10px}
+/* browse-item rows are plain clickable divs now (see openQuestionLightbox)
+   rather than <details>/<summary> — they get the padding/flex/cursor
+   .review-item summary used to provide directly, since there's no nested
+   summary anymore for those rules to apply through. */
+.browse-item{cursor:pointer;padding:14px 18px;display:flex;align-items:center;gap:9px}
+.browse-item:hover{background:#fafbfc}
+.browse-item .mastery-dot{flex:0 0 auto;width:10px;height:10px}
+.browse-stem{font-weight:700}
 .browse-opt{padding:6px 10px;border:1px solid var(--grey);border-radius:6px;margin-bottom:6px;font-size:13.5px}
 .browse-opt.correct{background:#dcf5e6;border-color:var(--green)}
 .browse-note-input{width:100%;min-height:60px;margin-top:4px;padding:8px 10px;border:1px solid var(--grey);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box}
 .browse-empty{color:var(--muted);font-size:13.5px;text-align:center;padding:40px 0}
+
+.lightbox-overlay{position:fixed;inset:0;background:rgba(10,16,30,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px}
+.lightbox-overlay.hidden{display:none}
+.lightbox{background:#fff;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.3);max-width:1000px;width:100%;max-height:88vh;display:flex;flex-direction:column;position:relative;overflow:hidden}
+.lightbox-close{position:absolute;top:8px;right:8px;background:transparent;border:none;font-size:22px;line-height:1;color:var(--muted);cursor:pointer;width:32px;height:32px;border-radius:6px;z-index:1}
+.lightbox-close:hover{background:#eef1f5}
+.lightbox-body{display:grid;grid-template-columns:2fr 1fr;flex:1;min-height:0}
+.lightbox-content{padding:28px 28px 24px;overflow-y:auto}
+.lightbox-chat{display:flex;flex-direction:column;border-left:1px solid #eef1f5;background:#fafbfc;min-height:0}
+.chat-messages{flex:1;overflow-y:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
+.chat-msg{max-width:92%;padding:8px 12px;border-radius:10px;font-size:13px;line-height:1.5;white-space:pre-wrap}
+.chat-msg.user{align-self:flex-end;background:var(--pm-blue);color:#fff;border-bottom-right-radius:2px}
+.chat-msg.model{align-self:flex-start;background:#eef1f5;color:var(--text);border-bottom-left-radius:2px}
+.chat-msg.model.chat-pending{color:var(--muted);font-style:italic}
+.chat-msg.model.chat-error{background:#fbeaea;color:var(--danger)}
+.chat-fazit-row{padding:10px 16px 0}
+.chat-fazit-row .btn{width:100%;font-size:12.5px;padding:8px 10px}
+.chat-input-row{display:flex;gap:8px;padding:12px 16px}
+.chat-input-row textarea{flex:1;min-height:38px;max-height:100px;padding:8px 10px;border:1px solid var(--grey);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box}
+.chat-input-row .btn{align-self:flex-end;padding:8px 14px;font-size:12.5px}
+.chat-empty-hint{color:var(--muted);font-size:12.5px;padding:16px;text-align:center}
+
+@media (max-width: 760px){
+  .lightbox-overlay{padding:0}
+  .lightbox{max-height:100vh;height:100%;border-radius:0}
+  .lightbox-body{grid-template-columns:1fr;overflow-y:auto;display:flex;flex-direction:column}
+  .lightbox-content{overflow-y:visible}
+  .lightbox-chat{border-left:none;border-top:1px solid #eef1f5;min-height:360px}
+}
 
 /* ---------- Mobile: collapse the question overview into a burger-toggled
    slide-in drawer, and tighten up spacing generally ---------- */
@@ -772,6 +796,10 @@ input[type=range]{accent-color:var(--blue)}
 
 <!-- ================= BROWSE SCREEN (Fragen durchsuchen) ================= -->
 <div id="screen-browse" class="hidden"></div>
+
+<!-- Question lightbox (opened from the browse screen) — question content,
+     notes, and the per-question AI chat share this single wide overlay. -->
+<div id="question-lightbox" class="lightbox-overlay hidden"></div>
 
 <button type="button" class="cheat-pause-btn hidden" id="pause-timer-btn" aria-label="Timer pausieren"><svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor" aria-hidden="true"><rect x="3" y="2" width="3.5" height="12" rx="1"/><rect x="9.5" y="2" width="3.5" height="12" rx="1"/></svg></button>
 
@@ -2404,21 +2432,97 @@ function renderBrowseGroups(){
     </details>`;
   }
   container.innerHTML = html || `<p class="browse-empty">${term || statusFilter !== 'all' || typeFilter !== 'all' || notesOnly ? 'Keine Fragen gefunden.' : 'Kein Fragenkatalog geladen.'}</p>`;
-  container.querySelectorAll('.browse-note-input').forEach(ta=>{
-    ta.addEventListener('change', ()=> saveQuestionNote(ta.dataset.qid, ta.value));
+  container.querySelectorAll('.browse-item').forEach(row=>{
+    row.addEventListener('click', ()=> openQuestionLightbox(row.dataset.qid));
   });
 }
 // The mastery-status dot is the only marker on the left of each collapsed
-// card (see the .browse-item summary::before override) — it takes the
-// dropdown-triangle's usual spot instead of sitting alongside it. Fragetyp
-// moved out of the collapsed summary into the expanded body (rowlbl/rowval,
-// same pattern as Musterantwort below it) so the collapsed row only shows
-// status + question text.
+// row (see the .browse-item::before override) — it takes the dropdown-
+// triangle's usual spot instead of sitting alongside it. Clicking a row no
+// longer expands it inline — it opens the shared lightbox instead (see
+// openQuestionLightbox), which is also where the chat/notes pane lives.
 function renderBrowseItem(q, entry){
   const level = ALL_Q.stableIds ? questionMasteryLevel(entry) : null;
   const dotHtml = level
     ? `<span class="mastery-dot" style="background:${level==='gold' ? MASTERY_GOLD_DOT_BG : `var(${MASTERY_COLOR_VAR[level]})`}" title="${MASTERY_LABELS[level]}"></span>`
     : '';
+  return `<div class="review-item browse-item" data-qid="${q.id}" role="button" tabindex="0">
+    ${dotHtml}
+    <span class="rv-preview">${escapeHtml(q.stem)}</span>
+  </div>`;
+}
+
+// ---------- question lightbox + per-question AI chat ----------
+// Reused by the browse screen only (not live exams) per explicit scoping:
+// the goal is to dig into ONE question deeper, with the ability to pull a
+// chat takeaway into the same question's study note and vice versa (the
+// note is sent to the AI as part of its grounding context every turn).
+const CHAT_MAX_MESSAGES = 20; // sliding window: drop OLDEST whole messages,
+const CHAT_MAX_CHARS = 4000;  // never mid-message, once either cap is hit.
+function loadQuestionChat(qId){
+  if(!ALL_Q.stableIds) return [];
+  const mem = loadQuestionMemory();
+  return (mem[qId] && mem[qId].chat) || [];
+}
+function saveQuestionChat(qId, messages){
+  if(!ALL_Q.stableIds) return;
+  let capped = messages.slice(-CHAT_MAX_MESSAGES);
+  let totalChars = capped.reduce((s,m)=> s + m.text.length, 0);
+  while(capped.length > 1 && totalChars > CHAT_MAX_CHARS){
+    totalChars -= capped[0].text.length;
+    capped = capped.slice(1);
+  }
+  const mem = loadQuestionMemory();
+  const entry = mem[qId] || {};
+  entry.chat = capped;
+  mem[qId] = entry;
+  saveQuestionMemory(mem);
+}
+// Sent in FULL every turn (never windowed) — it's the AI's ground truth and
+// stays small (one question's own content), unlike the chat history below
+// it which can grow long and IS windowed. Notes are included deliberately:
+// the user's own understanding-so-far is useful context, and it's part of
+// why the chat and notes are meant to inform each other.
+function buildChatGroundingBlock(q, entry){
+  const parts = ['FRAGE:\n' + q.stem];
+  if(q.type === 'mc'){
+    parts.push('ANTWORTOPTIONEN:\n' + q.options.map(o =>
+      `${o.letter}) ${o.text}${q.correct.has(o.letter) ? ' [KORREKT]' : ''}`).join('\n'));
+  } else {
+    parts.push('MUSTERANTWORT:\n' + q.answer);
+  }
+  if(hasUsefulInfo(q)) parts.push('ZUSATZINFO:\n' + q.info);
+  if(entry && entry.note) parts.push('EIGENE NOTIZEN DES NUTZERS:\n' + entry.note);
+  return parts.join('\n\n');
+}
+function buildChatPrompt(q, entry, history, newUserText){
+  const historyText = history.map(m => (m.role === 'user' ? 'Nutzer' : 'KI') + ': ' + m.text).join('\n');
+  return 'Du bist ein Tutor für die GPM-Basiszertifikat- und IPMA-Level-D-Prüfungsvorbereitung. ' +
+    'Beantworte die Frage des Nutzers ausschließlich auf Basis der folgenden Frage, (Muster-)Antwort, ' +
+    'Zusatzinfo und eigenen Notizen — widersprich diesen Angaben nicht und erfinde keine abweichenden ' +
+    'Fakten. Antworte auf Deutsch, klar und prägnant.\n\n' + buildChatGroundingBlock(q, entry) +
+    (historyText ? '\n\n--- BISHERIGER CHATVERLAUF ---\n' + historyText : '') +
+    '\n\nNutzer: ' + newUserText + '\nKI:';
+}
+function buildFazitPrompt(q, entry, history){
+  const historyText = history.map(m => (m.role === 'user' ? 'Nutzer' : 'KI') + ': ' + m.text).join('\n');
+  return 'Fasse die wichtigsten Erkenntnisse aus dem folgenden Chat über diese Prüfungsfrage in 2-4 ' +
+    'knappen Stichpunkten zusammen, geeignet zum Anhängen an eine persönliche Lernnotiz. Antworte ' +
+    'AUSSCHLIESSLICH mit den Stichpunkten (Markdown-Liste mit "-"), ohne Einleitung.\n\n' +
+    buildChatGroundingBlock(q, entry) + '\n\n--- CHATVERLAUF ---\n' + historyText;
+}
+
+let lightboxCurrentQid = null;
+function closeQuestionLightbox(){
+  document.getElementById('question-lightbox').classList.add('hidden');
+  lightboxCurrentQid = null;
+}
+function openQuestionLightbox(qId){
+  const q = ALL_Q.find(x => x.id === qId);
+  if(!q) return;
+  lightboxCurrentQid = qId;
+  const mem = ALL_Q.stableIds ? loadQuestionMemory() : {};
+  const entry = mem[qId] || {};
   const typeLabel = q.type==='mc' ? (q.multi ? 'Multiple Choice' : 'Single Choice') : 'Freitext';
 
   let answerHtml;
@@ -2427,30 +2531,122 @@ function renderBrowseItem(q, entry){
   } else {
     answerHtml = `<div class="rowval musterantwort">${renderMarkdownSafe(q.answer)}</div>`;
   }
-
   const infoHtml = hasUsefulInfo(q)
     ? `<div class="rowlbl">Zusatzinfo</div><div class="rowval">${renderMarkdownSafe(q.info)}</div>` : '';
-
   const noteHtml = ALL_Q.stableIds ? `
     <div class="rowlbl">Notizen</div>
-    <textarea class="browse-note-input" data-qid="${q.id}" placeholder="Eigene Notiz zu dieser Frage…">${escapeHtml(entry && entry.note ? entry.note : '')}</textarea>` : '';
+    <textarea class="browse-note-input" id="lightbox-notes-input" placeholder="Eigene Notiz zu dieser Frage…">${escapeHtml(entry.note || '')}</textarea>` : '';
 
-  return `<details class="review-item browse-item">
-    <summary>
-      ${dotHtml}
-      <span class="rv-preview">${escapeHtml(q.stem)}</span>
-    </summary>
-    <div class="rv-body">
-      <div class="stem browse-stem">${escapeHtml(q.stem)}</div>
-      <div class="rowlbl">Fragetyp</div>
-      <div class="rowval">${typeLabel}</div>
-      <div class="rowlbl">${q.type==='mc' ? 'Antwortoptionen' : 'Musterantwort'}</div>
-      ${answerHtml}
-      ${infoHtml}
-      ${noteHtml}
+  const hasKey = !!getAiKey();
+  let chatPaneHtml;
+  if(!ALL_Q.stableIds){
+    chatPaneHtml = `<p class="chat-empty-hint">Chat benötigt einen Fragenkatalog mit ID-Spalte.</p>`;
+  } else if(!hasKey){
+    chatPaneHtml = `<p class="chat-empty-hint">Für den Frage-Chat wird ein Gemini API-Key benötigt (siehe Konfigurationsseite).</p>`;
+  } else {
+    chatPaneHtml = `
+      <div class="chat-messages" id="chat-messages"></div>
+      <div class="chat-fazit-row"><button type="button" class="btn btn-secondary" id="chat-fazit-btn">Chat-Fazit in Notiz übernehmen</button></div>
+      <div class="chat-input-row">
+        <textarea id="chat-input" placeholder="Frage zu diesem Thema stellen…"></textarea>
+        <button type="button" class="btn btn-primary" id="chat-send-btn">Senden</button>
+      </div>`;
+  }
+
+  const overlay = document.getElementById('question-lightbox');
+  overlay.innerHTML = `<div class="lightbox">
+    <button type="button" class="lightbox-close" id="lightbox-close-btn" aria-label="Schließen">&times;</button>
+    <div class="lightbox-body">
+      <div class="lightbox-content">
+        <div class="stem browse-stem">${escapeHtml(q.stem)}</div>
+        <div class="rowlbl">Fragetyp</div>
+        <div class="rowval">${typeLabel}</div>
+        <div class="rowlbl">${q.type==='mc' ? 'Antwortoptionen' : 'Musterantwort'}</div>
+        ${answerHtml}
+        ${infoHtml}
+        ${noteHtml}
+      </div>
+      <div class="lightbox-chat">${chatPaneHtml}</div>
     </div>
-  </details>`;
+  </div>`;
+  overlay.classList.remove('hidden');
+
+  document.getElementById('lightbox-close-btn').addEventListener('click', closeQuestionLightbox);
+  overlay.addEventListener('click', e => { if(e.target === overlay) closeQuestionLightbox(); });
+  const notesInput = document.getElementById('lightbox-notes-input');
+  if(notesInput) notesInput.addEventListener('change', ()=> saveQuestionNote(qId, notesInput.value));
+
+  if(ALL_Q.stableIds && hasKey){
+    renderChatMessages(loadQuestionChat(qId));
+    document.getElementById('chat-send-btn').addEventListener('click', ()=> handleChatSend(q));
+    document.getElementById('chat-input').addEventListener('keydown', e=>{
+      if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); handleChatSend(q); }
+    });
+    document.getElementById('chat-fazit-btn').addEventListener('click', ()=> handleChatFazit(q));
+  }
 }
+function renderChatMessages(messages, statusText, errorText){
+  const container = document.getElementById('chat-messages');
+  if(!container) return;
+  let html = messages.map(m => `<div class="chat-msg ${m.role}">${m.role==='user' ? escapeHtml(m.text) : renderMarkdownSafe(m.text)}</div>`).join('');
+  if(!messages.length && !statusText && !errorText) html = '<p class="chat-empty-hint">Noch keine Nachrichten — stellen Sie unten eine Frage zu diesem Thema.</p>';
+  if(statusText) html += `<div class="chat-msg model chat-pending">${escapeHtml(statusText)}</div>`;
+  if(errorText) html += `<div class="chat-msg model chat-error">${escapeHtml(errorText)}</div>`;
+  container.innerHTML = html;
+  container.scrollTop = container.scrollHeight;
+}
+async function handleChatSend(q){
+  const input = document.getElementById('chat-input');
+  const text = input.value.trim();
+  if(!text || lightboxCurrentQid !== q.id) return;
+  input.value = '';
+  const sendBtn = document.getElementById('chat-send-btn');
+  sendBtn.disabled = true; input.disabled = true;
+  const mem = loadQuestionMemory();
+  const entry = mem[q.id] || {};
+  const history = loadQuestionChat(q.id);
+  const optimistic = [...history, {role:'user', text}];
+  renderChatMessages(optimistic, 'KI denkt nach…');
+  try{
+    const prompt = buildChatPrompt(q, entry, history, text);
+    const onStatus = msg => renderChatMessages(optimistic, msg);
+    const reply = (await callGeminiApi(prompt, GEMINI_TIMEOUT_EXAM_MS, {onStatus})).trim();
+    const updated = [...optimistic, {role:'model', text: reply}];
+    saveQuestionChat(q.id, updated);
+    if(lightboxCurrentQid === q.id) renderChatMessages(updated);
+  } catch(err){
+    if(lightboxCurrentQid === q.id) renderChatMessages(optimistic, null, err.message || 'Fehler bei der KI-Anfrage.');
+  } finally {
+    if(lightboxCurrentQid === q.id){ sendBtn.disabled = false; input.disabled = false; input.focus(); }
+  }
+}
+async function handleChatFazit(q){
+  const history = loadQuestionChat(q.id);
+  if(!history.length) return;
+  const btn = document.getElementById('chat-fazit-btn');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  try{
+    const mem = loadQuestionMemory();
+    const entry = mem[q.id] || {};
+    const onStatus = msg => { btn.textContent = msg; };
+    const summary = (await callGeminiApi(buildFazitPrompt(q, entry, history), GEMINI_TIMEOUT_EXAM_MS, {onStatus})).trim();
+    const existingNote = entry.note || '';
+    const appended = existingNote ? existingNote + '\n\n---\nKI-Chat-Fazit:\n' + summary : 'KI-Chat-Fazit:\n' + summary;
+    saveQuestionNote(q.id, appended);
+    if(lightboxCurrentQid === q.id){
+      const notesInput = document.getElementById('lightbox-notes-input');
+      if(notesInput) notesInput.value = appended;
+      btn.textContent = 'In Notiz übernommen ✓';
+      setTimeout(()=>{ if(lightboxCurrentQid === q.id) btn.textContent = originalText; }, 2000);
+    }
+  } catch(err){
+    if(lightboxCurrentQid === q.id) btn.textContent = 'Fehlgeschlagen — erneut versuchen';
+  } finally {
+    if(lightboxCurrentQid === q.id) btn.disabled = false;
+  }
+}
+
 document.getElementById('browse-open-btn').addEventListener('click', openBrowseScreen);
 
 // ---------- exam state ----------
