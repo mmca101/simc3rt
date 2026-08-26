@@ -1999,7 +1999,7 @@ document.getElementById('reset-selection-link').addEventListener('click', ()=>{
   document.getElementById('cfg-cheat-mode').checked = false;
   document.getElementById('cfg-show-progress-start').checked = true;
   focusSlider.value = '19';
-  applyPruefungsformatWeights(); // true out-of-the-box default is the real exam's per-KE spread, not all-1×
+  applyStudyRecommendationWeights(); // matches the actual first-load default (see renderKeGrid) — falls back to Prüfungsformat on its own with no Lerngedächtnis data to differentiate on
   weightsCustomized = false;
   updateFocusLabel();
   updateSummary();
