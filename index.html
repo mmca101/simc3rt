@@ -154,6 +154,8 @@ button{font-family:inherit;cursor:pointer}
 .badge-note{font-size:11px;font-weight:400;color:var(--muted);text-transform:none;letter-spacing:0}
 .warning-note{background:rgba(255,215,94,.18);border:1px solid var(--yellow);border-radius:6px;padding:10px 14px;font-size:12px;color:var(--yellow-d);line-height:1.5;margin-top:12px}
 .mastery-bar-wrap{margin:12px 0}
+.clipboard-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%) translateY(12px);background:var(--yellow-d);color:#fff;padding:9px 18px;border-radius:20px;font-size:12.5px;font-weight:600;box-shadow:0 4px 14px rgba(0,0,0,.25);opacity:0;pointer-events:none;transition:opacity .18s ease,transform .18s ease;z-index:70;max-width:90vw;text-align:center}
+.clipboard-toast.visible{opacity:1;transform:translateX(-50%) translateY(0)}
 .mastery-bar-wrap.mastery-bar-compact{margin:10px 0 0}
 .mastery-bar-wrap.mastery-bar-external{margin:28px 0 12px;padding:0 24px}
 .mastery-bar-wrap.mastery-bar-external .mastery-bar-details summary{text-align:center}
@@ -698,6 +700,9 @@ input[type=range]{accent-color:var(--blue)}
       <li>Für eine aussagekräftige Einschätzung alle 14 (GPM-B) bzw. 28 (IPMA-D) offiziellen Kompetenzelemente auswählen.</li>
       <li>Von den 61 Fragen sind üblicherweise rund 12 Checkboxfragen, der Rest offene Fragen
         (siehe "MC %" oben, standardmäßig auf dieses Verhältnis eingestellt).</li>
+      <li>In einer echten Prüfungssimulation (Übungs-Modus aus) sind Kopieren und Einfügen auf der gesamten
+        Prüfungsseite deaktiviert, wie in der echten Prüfungsumgebung. Im Übungs-Modus bleiben beide weiterhin
+        nutzbar.</li>
     </ul>
   </div>
 
@@ -4768,6 +4773,40 @@ if(navigator.storage && navigator.storage.persist){
     if(!already) navigator.storage.persist().catch(()=>{});
   }).catch(()=>{});
 }
+
+// ---------- Clipboard lock during a real exam simulation ----------
+// Emulates the real exam platform: copy/cut/paste are blocked anywhere on
+// the exam screen while running a true exam (Übungs-Modus off) — not just
+// in the answer field, per the actual platform's behavior. Übungs-Modus is
+// training, not a simulated exam, so the lock doesn't apply there; reuses
+// the existing cfg-cheat-mode checkbox rather than adding a second toggle.
+let clipboardToastTimer = null;
+function showClipboardBlockedToast(){
+  let toast = document.getElementById('clipboard-blocked-toast');
+  if(!toast){
+    toast = document.createElement('div');
+    toast.id = 'clipboard-blocked-toast';
+    toast.className = 'clipboard-toast';
+    document.body.appendChild(toast);
+  }
+  toast.textContent = 'Kopieren/Einfügen ist während der Prüfungssimulation deaktiviert.';
+  toast.classList.add('visible');
+  clearTimeout(clipboardToastTimer);
+  clipboardToastTimer = setTimeout(()=> toast.classList.remove('visible'), 2200);
+}
+const examScreenEl = document.getElementById('screen-exam');
+['copy','cut','paste'].forEach(evtName=>{
+  // Capture phase, so this fires — and can stopPropagation — before the
+  // Freitext toolbar's own 'paste' listener, which would otherwise still
+  // manually insert the clipboard text via its own sanitize-to-plain-text
+  // path even if only the browser's native default were prevented here.
+  examScreenEl.addEventListener(evtName, (e)=>{
+    if(document.getElementById('cfg-cheat-mode')?.checked) return; // Übungs-Modus: unrestricted
+    e.preventDefault();
+    e.stopPropagation();
+    showClipboardBlockedToast();
+  }, true);
+});
 
 })();
 </script>
