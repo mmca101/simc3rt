@@ -4754,6 +4754,21 @@ if('serviceWorker' in navigator){
   });
 }
 
+// Ask the browser to exempt this origin from automatic storage eviction.
+// Lerngedächtnis, Notizen and config all live in plain localStorage, which
+// browsers can otherwise silently wipe under disk pressure — and, on
+// Safari specifically, ITP purges ALL script-writable storage after 7 days
+// with no top-level visit, regardless of disk space. persist() asks for an
+// exemption from that. Support and the grant heuristic vary by browser
+// (Chrome/Safari decide automatically from site-engagement signals, no UI;
+// Firefox may show a one-time permission prompt) — calling it is harmless
+// where unsupported, and persisted() first avoids re-asking once granted.
+if(navigator.storage && navigator.storage.persist){
+  navigator.storage.persisted().then(already => {
+    if(!already) navigator.storage.persist().catch(()=>{});
+  }).catch(()=>{});
+}
+
 })();
 </script>
 </body>
