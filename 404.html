@@ -380,7 +380,10 @@ input[type=range]{accent-color:var(--blue)}
 .filter-row button.active{background:var(--navy2);color:#fff;border-color:var(--navy2)}
 
 #screen-browse{max-width:960px;margin:0 auto;padding:24px 20px 80px}
+#screen-preview{max-width:960px;margin:0 auto;padding:24px 20px 80px}
+.preview-title{margin:0 0 4px}
 .browse-header{display:flex;gap:12px;align-items:center;margin-bottom:18px;flex-wrap:wrap}
+.lightbox-body.single-col{display:block}
 .browse-header input[type=text]{flex:1;min-width:180px;padding:10px 14px;border:1.5px solid var(--text);border-radius:8px;font-size:14px;font-family:inherit}
 .browse-header input[type=text]:focus{outline:none;border-color:var(--text);box-shadow:0 0 0 2px rgba(28,36,48,.15)}
 .browse-filter-dropdown{position:relative;flex:0 0 auto}
@@ -801,6 +804,7 @@ input[type=range]{accent-color:var(--blue)}
 
 <!-- ================= BROWSE SCREEN (Fragen durchsuchen) ================= -->
 <div id="screen-browse" class="hidden"></div>
+<div id="screen-preview" class="hidden"></div>
 
 <!-- Question lightbox (opened from the browse screen) — question content,
      notes, and the per-question AI chat share this single wide overlay. -->
@@ -1546,6 +1550,21 @@ function saveQuestionNote(qId, note){
   mem[qId] = entry;
   saveQuestionMemory(mem);
 }
+// Deliberately its own field, separate from both the real exam's answers
+// (session.answers — never touched here, no exam is running) and the study
+// notes above — a preview-link recipient's own first-pass, self-researched
+// answer, written before ever seeing the Musterantwort (which this mode
+// never reveals at all). Kept purely as reference data for them to compare
+// against later; never feeds Lerngedächtnis/mastery or any grading path.
+function saveQuestionInitialAnswer(qId, text){
+  if(!ALL_Q.stableIds) return;
+  const mem = loadQuestionMemory();
+  const entry = mem[qId] || {};
+  const trimmed = (text || '').trim();
+  if(trimmed) entry.initialAnswer = trimmed; else delete entry.initialAnswer;
+  mem[qId] = entry;
+  saveQuestionMemory(mem);
+}
 // gray = never seen, orange = seen but not yet resolved (viewed/answered but
 // no grade yet), red = currently zero credit AND the last grade was wrong
 // (whether never-once-correct, or freshly demoted down from green), green =
@@ -1747,6 +1766,12 @@ function updateShareableUrl(){
 
   const sheetUrl = sheetUrlInput.value.trim();
   if(sheetUrl) params.set('sheet', extractSheetId(sheetUrl) || sheetUrl);
+
+  // Preserved as-is (not derived from any live UI state, unlike everything
+  // else this function rebuilds) so a reload during preview mode keeps
+  // pointing at the same restricted question set instead of silently
+  // dropping back to the full, unrestricted app.
+  if(previewQuestionIds) params.set('preview', previewQuestionIds.join(','));
 
   const count = document.getElementById('cfg-count').value;
   if(count && count !== '61') params.set('n', count);
@@ -4747,7 +4772,116 @@ if(injectedSheetUrl){
 }
 updateSheetOpenBtnState();
 
-loadQuestions();
+// ---------- Handout preview mode: ?preview=id1,id2,... ----------
+// A read-only, curated slice of a sheet for handing out to someone who
+// shouldn't get the full app: only the listed question ids, never the
+// Musterantwort/correct options (not even on demand — unlike Cheat-Modus,
+// there is no reveal here at all), no AI chat, no config/exam/full-browse
+// screen ever reachable from it. Still pulls the sheet through the exact
+// same loadQuestions()/buildQuestionsFromRows() path as normal entry — this
+// only ever gates which screen ends up visible afterward, never how the
+// data itself is fetched or parsed. Note this is a UX-level gate, not real
+// access control: the sheet id is still sitting right there in the URL, so
+// stripping "&preview=..." and reloading hands back the unrestricted app —
+// there's no server here to enforce anything harder than that.
+function extractPreviewIds(){
+  const raw = new URLSearchParams(location.search).get('preview');
+  if(!raw) return null;
+  const ids = raw.split(',').map(s=>s.trim()).filter(Boolean);
+  return ids.length ? ids : null;
+}
+const previewQuestionIds = extractPreviewIds();
+const screenPreview = document.getElementById('screen-preview');
+if(previewQuestionIds){
+  document.getElementById('screen-start').classList.add('hidden');
+  screenPreview.classList.remove('hidden');
+  screenPreview.innerHTML = `<p class="browse-empty">Vorschau wird geladen…</p>`;
+}
+function enterPreviewMode(){
+  if(!ALL_Q.stableIds || !ALL_Q.length){
+    screenPreview.innerHTML = `<p class="browse-empty">Diese Vorschau benötigt einen erfolgreich geladenen Fragenkatalog mit ID-Spalte.</p>`;
+    return;
+  }
+  renderPreviewScreen();
+}
+function renderPreviewScreen(){
+  screenPreview.innerHTML = `
+    <div class="browse-header">
+      <h2 class="preview-title">Fragenvorschau</h2>
+      <input type="text" id="preview-search-input" placeholder="Fragen durchsuchen…">
+    </div>
+    <div id="preview-list"></div>`;
+  document.getElementById('preview-search-input').addEventListener('input', renderPreviewList);
+  renderPreviewList();
+}
+// Flat — deliberately no Kompetenzelement/domain grouping here, unlike the
+// full browse screen: a handout is meant to be read top-to-bottom in the
+// order it was assembled, not re-sorted into the catalog's own structure.
+function renderPreviewList(){
+  const container = document.getElementById('preview-list');
+  const term = (document.getElementById('preview-search-input')?.value || '').trim().toLowerCase();
+  const byId = new Map(ALL_Q.map(q => [String(q.id), q]));
+  const matched = previewQuestionIds.map(id => byId.get(String(id))).filter(Boolean);
+  const visible = term ? matched.filter(q => q.stem.toLowerCase().includes(term)) : matched;
+  let html = visible.map(q => `<div class="review-item browse-item" data-qid="${escapeHtml(String(q.id))}" role="button" tabindex="0">
+    <span class="rv-preview">${escapeHtml(q.stem)}</span>
+  </div>`).join('');
+  if(!visible.length){
+    html = `<p class="browse-empty">${term ? 'Keine Fragen gefunden.' : 'Keine der angegebenen Fragen wurde im geladenen Fragenkatalog gefunden.'}</p>`;
+  }
+  const missing = previewQuestionIds.length - matched.length;
+  if(missing > 0 && !term){
+    html += `<p class="small-note" style="margin-top:14px">${missing} von ${previewQuestionIds.length} angegebenen Fragen ${missing===1?'wurde':'wurden'} im geladenen Katalog nicht gefunden.</p>`;
+  }
+  container.innerHTML = html;
+  container.querySelectorAll('.browse-item').forEach(row=>{
+    row.addEventListener('click', ()=> openPreviewLightbox(row.dataset.qid));
+  });
+}
+let previewLightboxQid = null;
+function closePreviewLightbox(){
+  document.getElementById('question-lightbox').classList.add('hidden');
+  previewLightboxQid = null;
+}
+// Reuses the same #question-lightbox overlay as the full browse screen's
+// openQuestionLightbox, but is otherwise fully separate: no Musterantwort,
+// no Zusatzinfo, no study notes, no AI chat — only the stem (plus, for a
+// Checkboxfrage, its unmarked options, since you need to see the choices to
+// reason about them) and the Erstantwort field below.
+function openPreviewLightbox(qId){
+  const q = ALL_Q.find(x => String(x.id) === String(qId));
+  if(!q) return;
+  previewLightboxQid = qId;
+  const mem = loadQuestionMemory();
+  const entry = mem[qId] || {};
+  const typeLabel = q.type==='mc' ? (q.multi ? 'Multiple Choice' : 'Single Choice') : 'Freitext';
+  const optionsHtml = q.type === 'mc'
+    ? `<div class="rowlbl">Antwortoptionen</div>` +
+      q.options.map(o => `<div class="browse-opt"><strong>${escapeHtml(o.letter)})</strong> ${escapeHtml(o.text)}</div>`).join('')
+    : '';
+  const overlay = document.getElementById('question-lightbox');
+  overlay.innerHTML = `<div class="lightbox">
+    <button type="button" class="lightbox-close" id="lightbox-close-btn" aria-label="Schließen">&times;</button>
+    <div class="lightbox-body single-col">
+      <div class="lightbox-content">
+        <div class="stem browse-stem">${escapeHtml(q.stem)}</div>
+        <div class="rowlbl">Fragetyp</div>
+        <div class="rowval">${typeLabel}</div>
+        ${optionsHtml}
+        <div class="rowlbl">Erstantwort</div>
+        <textarea class="browse-note-input" id="preview-initial-answer-input" placeholder="Ihre erste, eigenständig recherchierte Antwort…">${escapeHtml(entry.initialAnswer || '')}</textarea>
+      </div>
+    </div>
+  </div>`;
+  overlay.classList.remove('hidden');
+  document.getElementById('lightbox-close-btn').addEventListener('click', closePreviewLightbox);
+  overlay.addEventListener('click', e => { if(e.target === overlay) closePreviewLightbox(); });
+  document.getElementById('preview-initial-answer-input').addEventListener('change', function(){
+    saveQuestionInitialAnswer(qId, this.value);
+  });
+}
+
+loadQuestions().then(()=>{ if(previewQuestionIds) enterPreviewMode(); });
 
 // Best-effort app-shell caching for offline/PWA use — never touches the
 // live Sheets/Gemini calls (service worker ignores cross-origin requests),
