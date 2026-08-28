@@ -1782,12 +1782,12 @@ function updateShareableUrl(){
   // Preserved as-is (not derived from any live UI state, unlike everything
   // else this function rebuilds) so a reload during preview mode keeps
   // pointing at the same restricted question set instead of silently
-  // dropping back to the full, unrestricted app. Cycle mode writes back
-  // "cycle=N", never the resolved id list — the whole point of cycle mode
+  // dropping back to the full, unrestricted app. Day mode writes back
+  // "day=N", never the resolved id list — the whole point of day mode
   // is that the subset is re-derived from the id prefixes on every load,
   // not pinned to whatever happened to match at generation time.
   if(explicitPreviewIds) params.set('preview', explicitPreviewIds.join(','));
-  else if(previewCycleNumber) params.set('cycle', String(previewCycleNumber));
+  else if(previewDayNumber) params.set('day', String(previewDayNumber));
 
   const count = document.getElementById('cfg-count').value;
   if(count && count !== '61') params.set('n', count);
@@ -1819,7 +1819,7 @@ function updateShareableUrl(){
   const query = params.toString();
   history.replaceState(null, '', canonicalBasePath() + (query ? `?${query}` : ''));
 }
-// Shared with the raw-id-plus-cycle auto-convert redirect further below —
+// Shared with the raw-id-plus-day auto-convert redirect further below —
 // a bare-path sheet injection (see injectedSheetUrlFromLocation) has no
 // query string or canonical path of its own yet, so any URL this app
 // builds must collapse that form down to "/" rather than append onto the
@@ -4759,7 +4759,7 @@ sheetOpenBtn.addEventListener('click', ()=>{
   if(id) window.open(`https://docs.google.com/spreadsheets/d/${id}/edit`, '_blank', 'noopener');
 });
 
-// Reversible scramble for a sheet id, used only by the preview/cycle
+// Reversible scramble for a sheet id, used only by the preview/day
 // release links (?sp=<scrambled> instead of ?sheet=<realId>) so the id
 // isn't sitting in cleartext in an address bar someone might glance at,
 // screenshot, or paste around. This is explicitly NOT a secret: the
@@ -4768,15 +4768,15 @@ sheetOpenBtn.addEventListener('click', ()=>{
 // always shows the real request either way) recovers the real id in
 // seconds — that's an accepted, out-of-scope threat here. The bar this
 // clears is casual visibility only. The plain, unscrambled ?sheet=<id>
-// link (what updateShareableUrl() already writes outside preview/cycle
+// link (what updateShareableUrl() already writes outside preview/day
 // mode) remains the actual "full access" link — handing someone that one,
-// instead of a scrambled preview/cycle link, is the unlock.
+// instead of a scrambled preview/day link, is the unlock.
 //
 // No in-app UI generates these links — there's no admin/privileged view
 // here, just the one config screen, so a "build a restricted link" tool
 // living in it would be reachable by anyone who opens the full app. The
 // only way to get a scrambled link is the auto-convert below: hand-type
-// the plain "?sheet=<real id>&cycle=N" (or &preview=...) form and the app
+// the plain "?sheet=<real id>&day=N" (or &preview=...) form and the app
 // rewrites it in place — no separate tool to expose or keep in sync.
 const SHEET_ID_SCRAMBLE_KEY = 'simc3rt-preview-v1';
 function scrambleSheetId(id){
@@ -4802,7 +4802,7 @@ function unscrambleSheetId(token){
 //   https://sim-c3rt.de/?sheet=ID                                     (canonical — what updateShareableUrl() writes)
 //   https://sim-c3rt.de/?sheet=https://docs.google.com/spreadsheets/d/ID/edit
 //   https://sim-c3rt.de/https://docs.google.com/spreadsheets/d/ID/edit?gid=0#gid=0
-//   https://sim-c3rt.de/?sp=SCRAMBLED                                 (preview/cycle release links — see above)
+//   https://sim-c3rt.de/?sp=SCRAMBLED                                 (preview/day release links — see above)
 // extractSheetId() accepts either a bare ID or a full URL, so all three
 // plain forms resolve the same way; updateShareableUrl() always normalizes
 // down to the bare-ID form once the sheet loads, since the rest of the URL
@@ -4827,11 +4827,11 @@ function injectedSheetUrlFromLocation(){
 }
 const injectedSheetUrl = injectedSheetUrlFromLocation();
 
-// A raw (unscrambled) sheet identifier used TOGETHER with a preview/cycle
+// A raw (unscrambled) sheet identifier used TOGETHER with a preview/day
 // restriction is immediately converted to the scrambled ?sp= form and the
 // address bar rewritten in place — this is the ONLY way a scrambled link
 // ever gets produced (see the no-in-app-generator note above): a tutor
-// hand-types the plain, easy-to-remember "?sheet=<real id>&cycle=N" form
+// hand-types the plain, easy-to-remember "?sheet=<real id>&day=N" form
 // and the app auto-converts it into the actual shareable scrambled link
 // on first load. Reproducible any time the source sheet id changes (e.g.
 // the catalog moves to a new sheet): retype the same plain form against
@@ -4841,11 +4841,11 @@ const injectedSheetUrl = injectedSheetUrlFromLocation();
 // updateShareableUrl() — once the sheet finishes loading — keeps echoing
 // this scrambled form instead of reverting to the raw one it would
 // otherwise still remember seeing in the original URL. A raw sheet= with
-// NO preview/cycle restriction is left untouched — that stays the plain,
+// NO preview/day restriction is left untouched — that stays the plain,
 // unrestricted full-access entry, exactly as before.
 if(!scrambledSheetParam && injectedSheetUrl){
   const restrictionParams = new URLSearchParams(location.search);
-  if(restrictionParams.get('cycle') || restrictionParams.get('preview')){
+  if(restrictionParams.get('day') || restrictionParams.get('preview')){
     const rawId = extractSheetId(injectedSheetUrl) || injectedSheetUrl;
     scrambledSheetParam = scrambleSheetId(rawId);
     restrictionParams.delete('sheet');
@@ -4871,7 +4871,7 @@ if(injectedSheetUrl){
 }
 updateSheetOpenBtnState();
 
-// ---------- Handout preview mode: ?preview=id1,id2,... or ?cycle=N ----------
+// ---------- Handout preview mode: ?preview=id1,id2,... or ?day=N ----------
 // A read-only, curated slice of a sheet for handing out to someone who
 // shouldn't get the full app: only a subset of question ids, never the
 // Musterantwort/correct options (not even on demand — unlike Cheat-Modus,
@@ -4881,19 +4881,19 @@ updateSheetOpenBtnState();
 // only ever gates which screen ends up visible afterward, never how the
 // data itself is fetched or parsed. Note this is a UX-level gate, not real
 // access control: the sheet id is still sitting right there in the URL, so
-// stripping "&preview=..."/"&cycle=..." and reloading hands back the
+// stripping "&preview=..."/"&day=..." and reloading hands back the
 // unrestricted app — there's no server here to enforce anything harder.
 //
 // Two ways to specify the subset:
 //   ?preview=id1,id2,...  — explicit, hand-picked ids, in the given order.
-//   ?cycle=N              — every loaded question whose id starts with
-//     "N-" (a leading run of 1-3 digits + hyphen, e.g. "07-042" = cycle 7,
-//     "042" is whatever numbering the sheet already used). Cycle membership
+//   ?day=N                — every loaded question whose id starts with
+//     "N-" (a leading run of 1-3 digits + hyphen, e.g. "07-042" = day 7,
+//     "042" is whatever numbering the sheet already used). Day membership
 //     lives in the id itself, authored once — unlike hashing/partitioning
-//     the whole catalog to derive cycles, this needs no recomputation and
-//     can't reshuffle earlier cycles when later ones get added to the
-//     sheet; a given cycle number always resolves to the same questions,
-//     indefinitely, regardless of how many other cycles exist.
+//     the whole catalog to derive days, this needs no recomputation and
+//     can't reshuffle earlier days when later ones get added to the
+//     sheet; a given day number always resolves to the same questions,
+//     indefinitely, regardless of how many other days exist.
 // Mutually exclusive; an explicit ?preview= takes priority if both are
 // somehow present.
 function extractPreviewIds(){
@@ -4902,22 +4902,22 @@ function extractPreviewIds(){
   const ids = raw.split(',').map(s=>s.trim()).filter(Boolean);
   return ids.length ? ids : null;
 }
-function extractPreviewCycle(){
-  const raw = new URLSearchParams(location.search).get('cycle');
+function extractPreviewDay(){
+  const raw = new URLSearchParams(location.search).get('day');
   if(!raw) return null;
   const n = parseInt(raw.trim(), 10);
   return Number.isFinite(n) && n > 0 ? n : null;
 }
-const PREVIEW_CYCLE_ID_RE = /^(\d{1,3})-/;
-function questionCycleNumber(id){
-  const m = PREVIEW_CYCLE_ID_RE.exec(String(id));
+const PREVIEW_DAY_ID_RE = /^(\d{1,3})-/;
+function questionDayNumber(id){
+  const m = PREVIEW_DAY_ID_RE.exec(String(id));
   return m ? parseInt(m[1], 10) : null;
 }
 const explicitPreviewIds = extractPreviewIds();
-const previewCycleNumber = explicitPreviewIds ? null : extractPreviewCycle();
-let previewQuestionIds = explicitPreviewIds; // resolved for cycle mode once the sheet has loaded (see enterPreviewMode)
+const previewDayNumber = explicitPreviewIds ? null : extractPreviewDay();
+let previewQuestionIds = explicitPreviewIds; // resolved for day mode once the sheet has loaded (see enterPreviewMode)
 const screenPreview = document.getElementById('screen-preview');
-if(explicitPreviewIds || previewCycleNumber){
+if(explicitPreviewIds || previewDayNumber){
   document.getElementById('screen-start').classList.add('hidden');
   screenPreview.classList.remove('hidden');
   screenPreview.innerHTML = `<p class="browse-empty">Vorschau wird geladen…</p>`;
@@ -4927,15 +4927,15 @@ function enterPreviewMode(){
     screenPreview.innerHTML = `<p class="browse-empty">Diese Vorschau benötigt einen erfolgreich geladenen Fragenkatalog mit ID-Spalte.</p>`;
     return;
   }
-  if(previewCycleNumber){
-    previewQuestionIds = ALL_Q.filter(q => questionCycleNumber(q.id) === previewCycleNumber).map(q => q.id);
+  if(previewDayNumber){
+    previewQuestionIds = ALL_Q.filter(q => questionDayNumber(q.id) === previewDayNumber).map(q => q.id);
   }
   renderPreviewScreen();
 }
 function renderPreviewScreen(){
   screenPreview.innerHTML = `
     <div class="browse-header preview-header">
-      <h2 class="preview-title">Fragenvorschau${previewCycleNumber ? ` — Zyklus ${previewCycleNumber}` : ''}</h2>
+      <h2 class="preview-title">Fragenvorschau${previewDayNumber ? ` — Tag ${previewDayNumber}` : ''}</h2>
       <input type="text" id="preview-search-input" placeholder="Fragen durchsuchen…">
     </div>
     <div id="preview-list"></div>`;
@@ -4944,7 +4944,7 @@ function renderPreviewScreen(){
 }
 // Flat — deliberately no Kompetenzelement/domain grouping here, unlike the
 // full browse screen: a handout is meant to be read top-to-bottom in the
-// order it was assembled (explicit mode) or in catalog order (cycle mode),
+// order it was assembled (explicit mode) or in catalog order (day mode),
 // not re-sorted into the catalog's own structure.
 function renderPreviewList(){
   const container = document.getElementById('preview-list');
@@ -4956,9 +4956,9 @@ function renderPreviewList(){
     <span class="rv-preview">${escapeHtml(q.stem)}</span>
   </div>`).join('');
   if(!visible.length){
-    html = `<p class="browse-empty">${term ? 'Keine Fragen gefunden.' : previewCycleNumber ? `Für Zyklus ${previewCycleNumber} wurden keine Fragen im geladenen Katalog gefunden.` : 'Keine der angegebenen Fragen wurde im geladenen Fragenkatalog gefunden.'}</p>`;
+    html = `<p class="browse-empty">${term ? 'Keine Fragen gefunden.' : previewDayNumber ? `Für Tag ${previewDayNumber} wurden keine Fragen im geladenen Katalog gefunden.` : 'Keine der angegebenen Fragen wurde im geladenen Fragenkatalog gefunden.'}</p>`;
   }
-  // Only meaningful for explicit mode — cycle mode has no separate
+  // Only meaningful for explicit mode — day mode has no separate
   // "requested count" to fall short of, whatever matches the prefix IS
   // the complete set.
   if(explicitPreviewIds){
@@ -5015,7 +5015,7 @@ function openPreviewLightbox(qId){
   });
 }
 
-loadQuestions().then(()=>{ if(explicitPreviewIds || previewCycleNumber) enterPreviewMode(); });
+loadQuestions().then(()=>{ if(explicitPreviewIds || previewDayNumber) enterPreviewMode(); });
 
 // Best-effort app-shell caching for offline/PWA use — never touches the
 // live Sheets/Gemini calls (service worker ignores cross-origin requests),
