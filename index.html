@@ -4870,7 +4870,10 @@ function unscrambleSheetId(token){
 // 404.html is a copy of this file (GitHub Pages serves it, unchanged URL,
 // for any path that isn't a real file — the standard static-site
 // SPA-routing trick).
-const scrambledSheetParam = new URLSearchParams(location.search).get('sp');
+// let, not const: the auto-convert block below can update this once a raw
+// entry gets rewritten to the scrambled form, so updateShareableUrl() (see
+// its own comment) keeps echoing the scrambled form afterward too.
+let scrambledSheetParam = new URLSearchParams(location.search).get('sp');
 function injectedSheetUrlFromLocation(){
   if(scrambledSheetParam){
     const decoded = unscrambleSheetId(scrambledSheetParam);
@@ -4883,6 +4886,33 @@ function injectedSheetUrlFromLocation(){
   return null;
 }
 const injectedSheetUrl = injectedSheetUrlFromLocation();
+
+// A raw (unscrambled) sheet identifier used TOGETHER with a preview/cycle
+// restriction is immediately converted to the scrambled ?sp= form and the
+// address bar rewritten in place. Lets a tutor hand-type a quick,
+// easy-to-remember "?sheet=<real id>&cycle=N" link — no need to open the
+// generator card below — and have it auto-convert into the actual
+// shareable scrambled link on first load. Reproducible any time the
+// source sheet id changes (e.g. the catalog moves to a new sheet): retype
+// the same plain form against the new id, get a freshly correct scrambled
+// link back automatically, every time — nothing to remember or regenerate
+// by hand. scrambledSheetParam is updated here too (not just the address
+// bar), so updateShareableUrl() — once the sheet finishes loading — keeps
+// echoing this scrambled form instead of reverting to the raw one it
+// would otherwise still remember seeing in the original URL. A raw
+// sheet= with NO preview/cycle restriction is left untouched — that stays
+// the plain, unrestricted full-access entry, exactly as before.
+if(!scrambledSheetParam && injectedSheetUrl){
+  const restrictionParams = new URLSearchParams(location.search);
+  if(restrictionParams.get('cycle') || restrictionParams.get('preview')){
+    const rawId = extractSheetId(injectedSheetUrl) || injectedSheetUrl;
+    scrambledSheetParam = scrambleSheetId(rawId);
+    restrictionParams.delete('sheet');
+    restrictionParams.set('sp', scrambledSheetParam);
+    history.replaceState(null, '', canonicalBasePath() + '?' + restrictionParams.toString());
+  }
+}
+
 // The address bar carries just the bare ID (updateShareableUrl() shortens
 // it there deliberately) — but the Fragenkatalog field should still show a
 // real, recognizable Google Sheets URL, not a bare ID that reads as broken.
