@@ -658,38 +658,6 @@ input[type=range]{accent-color:var(--blue)}
           <div id="mastery-bar-catalog-slot"></div>
         </div>
       </details>
-
-      <details class="config-section" id="preview-link-card">
-        <summary><span>Vorschau-Link erstellen</span></summary>
-        <div class="config-section-body">
-          <div class="small-note">
-            Erzeugt einen eingeschränkten Link: nur die angegebenen Fragen, nie Musterantworten, kein Zugriff auf
-            Konfiguration/Prüfung/vollen Katalog. Die Sheet-ID im Link ist verschlüsselt, nicht im Klartext in der
-            Adresszeile sichtbar — der normale Link oben bleibt der volle Zugriff.
-          </div>
-          <div class="field" style="margin-top:8px">
-            <label>Zyklus-Nummer <span class="badge-note">(Fragen-IDs mit Präfix "N-", z. B. "07-001")</span></label>
-            <input type="number" id="preview-link-cycle" min="1" placeholder="z. B. 7">
-          </div>
-          <div class="toolbar-row fill-row">
-            <button class="btn btn-secondary" id="preview-link-cycle-btn">Link für Zyklus erstellen</button>
-          </div>
-          <div class="field" style="margin-top:12px">
-            <label>Oder: einzelne Fragen-IDs <span class="badge-note">(kommagetrennt)</span></label>
-            <input type="text" id="preview-link-ids" placeholder="z. B. 07-001, 07-003, 07-005">
-          </div>
-          <div class="toolbar-row fill-row">
-            <button class="btn btn-secondary" id="preview-link-ids-btn">Link für Auswahl erstellen</button>
-          </div>
-          <div class="field hidden" id="preview-link-result-wrap" style="margin-top:12px">
-            <label>Vorschau-Link</label>
-            <input type="text" id="preview-link-result" readonly>
-            <div class="toolbar-row fill-row" style="margin-top:6px">
-              <button class="btn btn-link" id="preview-link-copy-btn">In Zwischenablage kopieren</button>
-            </div>
-          </div>
-        </div>
-      </details>
     </div>
 
     <div class="toolbar-row main-actions-row" style="margin-top:18px">
@@ -1848,11 +1816,11 @@ function updateShareableUrl(){
   const query = params.toString();
   history.replaceState(null, '', canonicalBasePath() + (query ? `?${query}` : ''));
 }
-// Shared with the preview-link generator below — a bare-path sheet
-// injection (see injectedSheetUrlFromLocation) has no query string or
-// canonical path of its own yet, so any URL this app builds must collapse
-// that form down to "/" rather than append onto the raw sheet URL sitting
-// in location.pathname.
+// Shared with the raw-id-plus-cycle auto-convert redirect further below —
+// a bare-path sheet injection (see injectedSheetUrlFromLocation) has no
+// query string or canonical path of its own yet, so any URL this app
+// builds must collapse that form down to "/" rather than append onto the
+// raw sheet URL sitting in location.pathname.
 function canonicalBasePath(){
   const rawPath = location.pathname.replace(/^\/+/, '');
   return /^https?:\/\//i.test(rawPath) ? '/' : location.pathname;
@@ -4788,44 +4756,6 @@ sheetOpenBtn.addEventListener('click', ()=>{
   if(id) window.open(`https://docs.google.com/spreadsheets/d/${id}/edit`, '_blank', 'noopener');
 });
 
-// ---------- Preview-link generator (Vorschau-Link erstellen) ----------
-// A hand-computed scrambled id isn't practical, so this builds the actual
-// link from the currently loaded sheet — cycle mode or an explicit id
-// list, either way against the sheet id currently in cfg-sheet-url, never
-// this page's own current URL (which may itself already be scrambled or
-// restricted).
-function buildPreviewLink(extraParams){
-  const id = extractSheetId(sheetUrlInput.value.trim());
-  if(!id){ alert('Bitte zuerst eine gültige Sheet-URL laden.'); return null; }
-  const params = new URLSearchParams();
-  params.set('sp', scrambleSheetId(id));
-  for(const [k, v] of Object.entries(extraParams)) params.set(k, v);
-  return location.origin + canonicalBasePath() + '?' + params.toString();
-}
-const previewLinkResultWrap = document.getElementById('preview-link-result-wrap');
-const previewLinkResultInput = document.getElementById('preview-link-result');
-function showPreviewLinkResult(url){
-  previewLinkResultInput.value = url;
-  previewLinkResultWrap.classList.remove('hidden');
-  previewLinkResultInput.select();
-}
-document.getElementById('preview-link-cycle-btn').addEventListener('click', ()=>{
-  const n = parseInt(document.getElementById('preview-link-cycle').value, 10);
-  if(!Number.isFinite(n) || n <= 0){ alert('Bitte eine gültige Zyklus-Nummer eingeben.'); return; }
-  const url = buildPreviewLink({cycle: String(n)});
-  if(url) showPreviewLinkResult(url);
-});
-document.getElementById('preview-link-ids-btn').addEventListener('click', ()=>{
-  const ids = document.getElementById('preview-link-ids').value.split(',').map(s=>s.trim()).filter(Boolean);
-  if(!ids.length){ alert('Bitte mindestens eine Fragen-ID eingeben.'); return; }
-  const url = buildPreviewLink({preview: ids.join(',')});
-  if(url) showPreviewLinkResult(url);
-});
-document.getElementById('preview-link-copy-btn').addEventListener('click', ()=>{
-  previewLinkResultInput.select();
-  navigator.clipboard?.writeText(previewLinkResultInput.value).catch(()=>{});
-});
-
 // Reversible scramble for a sheet id, used only by the preview/cycle
 // release links (?sp=<scrambled> instead of ?sheet=<realId>) so the id
 // isn't sitting in cleartext in an address bar someone might glance at,
@@ -4838,6 +4768,13 @@ document.getElementById('preview-link-copy-btn').addEventListener('click', ()=>{
 // link (what updateShareableUrl() already writes outside preview/cycle
 // mode) remains the actual "full access" link — handing someone that one,
 // instead of a scrambled preview/cycle link, is the unlock.
+//
+// No in-app UI generates these links — there's no admin/privileged view
+// here, just the one config screen, so a "build a restricted link" tool
+// living in it would be reachable by anyone who opens the full app. The
+// only way to get a scrambled link is the auto-convert below: hand-type
+// the plain "?sheet=<real id>&cycle=N" (or &preview=...) form and the app
+// rewrites it in place — no separate tool to expose or keep in sync.
 const SHEET_ID_SCRAMBLE_KEY = 'simc3rt-preview-v1';
 function scrambleSheetId(id){
   const bytes = new TextEncoder().encode(id);
@@ -4889,19 +4826,20 @@ const injectedSheetUrl = injectedSheetUrlFromLocation();
 
 // A raw (unscrambled) sheet identifier used TOGETHER with a preview/cycle
 // restriction is immediately converted to the scrambled ?sp= form and the
-// address bar rewritten in place. Lets a tutor hand-type a quick,
-// easy-to-remember "?sheet=<real id>&cycle=N" link — no need to open the
-// generator card below — and have it auto-convert into the actual
-// shareable scrambled link on first load. Reproducible any time the
-// source sheet id changes (e.g. the catalog moves to a new sheet): retype
-// the same plain form against the new id, get a freshly correct scrambled
-// link back automatically, every time — nothing to remember or regenerate
-// by hand. scrambledSheetParam is updated here too (not just the address
-// bar), so updateShareableUrl() — once the sheet finishes loading — keeps
-// echoing this scrambled form instead of reverting to the raw one it
-// would otherwise still remember seeing in the original URL. A raw
-// sheet= with NO preview/cycle restriction is left untouched — that stays
-// the plain, unrestricted full-access entry, exactly as before.
+// address bar rewritten in place — this is the ONLY way a scrambled link
+// ever gets produced (see the no-in-app-generator note above): a tutor
+// hand-types the plain, easy-to-remember "?sheet=<real id>&cycle=N" form
+// and the app auto-converts it into the actual shareable scrambled link
+// on first load. Reproducible any time the source sheet id changes (e.g.
+// the catalog moves to a new sheet): retype the same plain form against
+// the new id, get a freshly correct scrambled link back automatically,
+// every time — nothing to remember or regenerate by hand.
+// scrambledSheetParam is updated here too (not just the address bar), so
+// updateShareableUrl() — once the sheet finishes loading — keeps echoing
+// this scrambled form instead of reverting to the raw one it would
+// otherwise still remember seeing in the original URL. A raw sheet= with
+// NO preview/cycle restriction is left untouched — that stays the plain,
+// unrestricted full-access entry, exactly as before.
 if(!scrambledSheetParam && injectedSheetUrl){
   const restrictionParams = new URLSearchParams(location.search);
   if(restrictionParams.get('cycle') || restrictionParams.get('preview')){
