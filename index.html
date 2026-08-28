@@ -1770,8 +1770,12 @@ function updateShareableUrl(){
   // Preserved as-is (not derived from any live UI state, unlike everything
   // else this function rebuilds) so a reload during preview mode keeps
   // pointing at the same restricted question set instead of silently
-  // dropping back to the full, unrestricted app.
-  if(previewQuestionIds) params.set('preview', previewQuestionIds.join(','));
+  // dropping back to the full, unrestricted app. Cycle mode writes back
+  // "cycle=N", never the resolved id list — the whole point of cycle mode
+  // is that the subset is re-derived from the id prefixes on every load,
+  // not pinned to whatever happened to match at generation time.
+  if(explicitPreviewIds) params.set('preview', explicitPreviewIds.join(','));
+  else if(previewCycleNumber) params.set('cycle', String(previewCycleNumber));
 
   const count = document.getElementById('cfg-count').value;
   if(count && count !== '61') params.set('n', count);
@@ -4772,9 +4776,9 @@ if(injectedSheetUrl){
 }
 updateSheetOpenBtnState();
 
-// ---------- Handout preview mode: ?preview=id1,id2,... ----------
+// ---------- Handout preview mode: ?preview=id1,id2,... or ?cycle=N ----------
 // A read-only, curated slice of a sheet for handing out to someone who
-// shouldn't get the full app: only the listed question ids, never the
+// shouldn't get the full app: only a subset of question ids, never the
 // Musterantwort/correct options (not even on demand — unlike Cheat-Modus,
 // there is no reveal here at all), no AI chat, no config/exam/full-browse
 // screen ever reachable from it. Still pulls the sheet through the exact
@@ -4782,17 +4786,43 @@ updateSheetOpenBtnState();
 // only ever gates which screen ends up visible afterward, never how the
 // data itself is fetched or parsed. Note this is a UX-level gate, not real
 // access control: the sheet id is still sitting right there in the URL, so
-// stripping "&preview=..." and reloading hands back the unrestricted app —
-// there's no server here to enforce anything harder than that.
+// stripping "&preview=..."/"&cycle=..." and reloading hands back the
+// unrestricted app — there's no server here to enforce anything harder.
+//
+// Two ways to specify the subset:
+//   ?preview=id1,id2,...  — explicit, hand-picked ids, in the given order.
+//   ?cycle=N              — every loaded question whose id starts with
+//     "N-" (a leading run of 1-3 digits + hyphen, e.g. "07-042" = cycle 7,
+//     "042" is whatever numbering the sheet already used). Cycle membership
+//     lives in the id itself, authored once — unlike hashing/partitioning
+//     the whole catalog to derive cycles, this needs no recomputation and
+//     can't reshuffle earlier cycles when later ones get added to the
+//     sheet; a given cycle number always resolves to the same questions,
+//     indefinitely, regardless of how many other cycles exist.
+// Mutually exclusive; an explicit ?preview= takes priority if both are
+// somehow present.
 function extractPreviewIds(){
   const raw = new URLSearchParams(location.search).get('preview');
   if(!raw) return null;
   const ids = raw.split(',').map(s=>s.trim()).filter(Boolean);
   return ids.length ? ids : null;
 }
-const previewQuestionIds = extractPreviewIds();
+function extractPreviewCycle(){
+  const raw = new URLSearchParams(location.search).get('cycle');
+  if(!raw) return null;
+  const n = parseInt(raw.trim(), 10);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+const PREVIEW_CYCLE_ID_RE = /^(\d{1,3})-/;
+function questionCycleNumber(id){
+  const m = PREVIEW_CYCLE_ID_RE.exec(String(id));
+  return m ? parseInt(m[1], 10) : null;
+}
+const explicitPreviewIds = extractPreviewIds();
+const previewCycleNumber = explicitPreviewIds ? null : extractPreviewCycle();
+let previewQuestionIds = explicitPreviewIds; // resolved for cycle mode once the sheet has loaded (see enterPreviewMode)
 const screenPreview = document.getElementById('screen-preview');
-if(previewQuestionIds){
+if(explicitPreviewIds || previewCycleNumber){
   document.getElementById('screen-start').classList.add('hidden');
   screenPreview.classList.remove('hidden');
   screenPreview.innerHTML = `<p class="browse-empty">Vorschau wird geladen…</p>`;
@@ -4802,12 +4832,15 @@ function enterPreviewMode(){
     screenPreview.innerHTML = `<p class="browse-empty">Diese Vorschau benötigt einen erfolgreich geladenen Fragenkatalog mit ID-Spalte.</p>`;
     return;
   }
+  if(previewCycleNumber){
+    previewQuestionIds = ALL_Q.filter(q => questionCycleNumber(q.id) === previewCycleNumber).map(q => q.id);
+  }
   renderPreviewScreen();
 }
 function renderPreviewScreen(){
   screenPreview.innerHTML = `
     <div class="browse-header">
-      <h2 class="preview-title">Fragenvorschau</h2>
+      <h2 class="preview-title">Fragenvorschau${previewCycleNumber ? ` — Zyklus ${previewCycleNumber}` : ''}</h2>
       <input type="text" id="preview-search-input" placeholder="Fragen durchsuchen…">
     </div>
     <div id="preview-list"></div>`;
@@ -4816,7 +4849,8 @@ function renderPreviewScreen(){
 }
 // Flat — deliberately no Kompetenzelement/domain grouping here, unlike the
 // full browse screen: a handout is meant to be read top-to-bottom in the
-// order it was assembled, not re-sorted into the catalog's own structure.
+// order it was assembled (explicit mode) or in catalog order (cycle mode),
+// not re-sorted into the catalog's own structure.
 function renderPreviewList(){
   const container = document.getElementById('preview-list');
   const term = (document.getElementById('preview-search-input')?.value || '').trim().toLowerCase();
@@ -4827,11 +4861,16 @@ function renderPreviewList(){
     <span class="rv-preview">${escapeHtml(q.stem)}</span>
   </div>`).join('');
   if(!visible.length){
-    html = `<p class="browse-empty">${term ? 'Keine Fragen gefunden.' : 'Keine der angegebenen Fragen wurde im geladenen Fragenkatalog gefunden.'}</p>`;
+    html = `<p class="browse-empty">${term ? 'Keine Fragen gefunden.' : previewCycleNumber ? `Für Zyklus ${previewCycleNumber} wurden keine Fragen im geladenen Katalog gefunden.` : 'Keine der angegebenen Fragen wurde im geladenen Fragenkatalog gefunden.'}</p>`;
   }
-  const missing = previewQuestionIds.length - matched.length;
-  if(missing > 0 && !term){
-    html += `<p class="small-note" style="margin-top:14px">${missing} von ${previewQuestionIds.length} angegebenen Fragen ${missing===1?'wurde':'wurden'} im geladenen Katalog nicht gefunden.</p>`;
+  // Only meaningful for explicit mode — cycle mode has no separate
+  // "requested count" to fall short of, whatever matches the prefix IS
+  // the complete set.
+  if(explicitPreviewIds){
+    const missing = explicitPreviewIds.length - matched.length;
+    if(missing > 0 && !term){
+      html += `<p class="small-note" style="margin-top:14px">${missing} von ${explicitPreviewIds.length} angegebenen Fragen ${missing===1?'wurde':'wurden'} im geladenen Katalog nicht gefunden.</p>`;
+    }
   }
   container.innerHTML = html;
   container.querySelectorAll('.browse-item').forEach(row=>{
@@ -4881,7 +4920,7 @@ function openPreviewLightbox(qId){
   });
 }
 
-loadQuestions().then(()=>{ if(previewQuestionIds) enterPreviewMode(); });
+loadQuestions().then(()=>{ if(explicitPreviewIds || previewCycleNumber) enterPreviewMode(); });
 
 // Best-effort app-shell caching for offline/PWA use — never touches the
 // live Sheets/Gemini calls (service worker ignores cross-origin requests),
