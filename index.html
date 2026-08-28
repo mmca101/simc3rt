@@ -386,6 +386,9 @@ input[type=range]{accent-color:var(--blue)}
 .lightbox-body.single-col{display:block}
 .browse-header input[type=text]{flex:1;min-width:180px;padding:10px 14px;border:1.5px solid var(--text);border-radius:8px;font-size:14px;font-family:inherit}
 .browse-header input[type=text]:focus{outline:none;border-color:var(--text);box-shadow:0 0 0 2px rgba(28,36,48,.15)}
+/* No back button, no filter dropdown here (unlike the full browse screen) — stacked instead of a shared row, so the search field can take the full width instead of splitting it with the title. */
+.preview-header{flex-direction:column;align-items:stretch}
+.preview-header input[type=text]{width:100%;box-sizing:border-box}
 .browse-filter-dropdown{position:relative;flex:0 0 auto}
 .browse-filter-dropdown summary{list-style:none;cursor:pointer}
 .browse-filter-dropdown summary::-webkit-details-marker{display:none}
@@ -4931,7 +4934,7 @@ function enterPreviewMode(){
 }
 function renderPreviewScreen(){
   screenPreview.innerHTML = `
-    <div class="browse-header">
+    <div class="browse-header preview-header">
       <h2 class="preview-title">Fragenvorschau${previewCycleNumber ? ` — Zyklus ${previewCycleNumber}` : ''}</h2>
       <input type="text" id="preview-search-input" placeholder="Fragen durchsuchen…">
     </div>
