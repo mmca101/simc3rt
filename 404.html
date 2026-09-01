@@ -220,7 +220,7 @@ input[type=range]{accent-color:var(--blue)}
    -hidden class) — kept on the opposite corner so the two never collide. */
 .notes-overlay{position:fixed;left:18px;bottom:18px;background:#fff;border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.22);padding:10px;z-index:39;width:240px}
 .notes-overlay.notes-hidden{display:none}
-.notes-overlay textarea{width:100%;min-height:70px;padding:8px 10px;border:1px solid var(--grey);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box}
+.notes-overlay textarea{width:100%;min-height:70px;max-height:50vh;padding:8px 10px;border:1px solid var(--grey);border-radius:6px;font-size:13px;font-family:inherit;resize:none;overflow:hidden;box-sizing:border-box}
 .notes-overlay-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:8px}
 .notes-overlay-actions .btn{padding:6px 12px;font-size:12.5px}
 
@@ -406,12 +406,29 @@ input[type=range]{accent-color:var(--blue)}
 .browse-item{cursor:pointer;padding:14px 18px;display:flex;align-items:center;gap:9px}
 .browse-item:hover{background:#fafbfc}
 .browse-item .mastery-dot{flex:0 0 auto;width:10px;height:10px}
-.browse-stem{font-weight:700}
+.browse-stem{font-weight:700;margin-bottom:18px}
+/* .stem/.rowlbl/.rowval's real font rules only ever applied under a
+   .review-item ancestor (see the ".review-item .stem" etc. rules above) —
+   .lightbox-content isn't one, so all three were silently falling back to
+   plain default text size/weight instead of matching the rest of the app
+   (including the Fragetyp/Kompetenz box's own 13.5px value text). Mirrored
+   here rather than adding .review-item to lightbox-content, since that
+   class also carries card chrome (background/shadow/margin) that doesn't
+   belong on the content pane itself. */
+.lightbox-content .stem{font-size:14px;white-space:pre-wrap}
+.lightbox-content .rowlbl{font-size:11.5px;color:var(--muted);text-transform:uppercase;font-weight:700;margin-top:18px;margin-bottom:4px}
+.lightbox-content .rowval{font-size:13.5px;line-height:1.5;white-space:pre-wrap}
 .browse-opt{padding:6px 10px;border:1px solid var(--grey);border-radius:6px;margin-bottom:6px;font-size:13.5px}
 .browse-opt.correct{background:#dcf5e6;border-color:var(--green)}
-.browse-note-input{width:100%;min-height:60px;margin-top:4px;padding:8px 10px;border:1px solid var(--grey);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box}
+.browse-note-input{width:100%;min-height:60px;max-height:50vh;margin-top:4px;padding:6px 10px;border:1px solid var(--grey);border-radius:6px;font-size:13px;font-family:inherit;resize:none;overflow:hidden;box-sizing:border-box}
 .browse-empty{color:var(--muted);font-size:13.5px;text-align:center;padding:40px 0}
 
+/* Locks the page behind the lightbox from scrolling — otherwise scrolling
+   inside the lightbox's own content/chat panes competes with the page's
+   own scrollbar underneath it. Set on BOTH html and body (and toggled on
+   both in JS) since browsers vary on which element actually owns the
+   viewport's scroll — body alone didn't reliably block it. */
+html.lightbox-open, body.lightbox-open{overflow:hidden;height:100%}
 .lightbox-overlay{position:fixed;inset:0;background:rgba(10,16,30,.55);display:flex;align-items:center;justify-content:center;z-index:60;padding:20px}
 .lightbox-overlay.hidden{display:none}
 .lightbox{background:#fff;border-radius:10px;box-shadow:0 10px 40px rgba(0,0,0,.3);max-width:1000px;width:100%;max-height:88vh;display:flex;flex-direction:column;position:relative;overflow:hidden}
@@ -426,19 +443,96 @@ input[type=range]{accent-color:var(--blue)}
 .chat-msg.model{align-self:flex-start;background:#eef1f5;color:var(--text);border-bottom-left-radius:2px}
 .chat-msg.model.chat-pending{color:var(--muted);font-style:italic}
 .chat-msg.model.chat-error{background:#fbeaea;color:var(--danger)}
-.chat-fazit-row{padding:10px 16px 0}
-.chat-fazit-row .btn{width:100%;font-size:12.5px;padding:8px 10px}
-.chat-input-row{display:flex;gap:8px;padding:12px 16px}
-.chat-input-row textarea{flex:1;min-height:38px;max-height:100px;padding:8px 10px;border:1px solid var(--grey);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box}
-.chat-input-row .btn{align-self:flex-end;padding:8px 14px;font-size:12.5px}
+/* Input gets its own full-width row; Senden (primary/green) and the Fazit
+   button (secondary/gray) share a single 50/50 row underneath — not side
+   by side with the textarea like before. */
+.chat-compose{padding:12px 16px;display:flex;flex-direction:column;gap:8px}
+.chat-compose textarea{width:100%;min-height:38px;max-height:100px;padding:8px 10px;border:1px solid var(--grey);border-radius:6px;font-size:13px;font-family:inherit;resize:vertical;box-sizing:border-box}
+.chat-compose-actions{display:flex;gap:8px}
+.chat-compose-actions .btn{flex:1;font-size:12.5px;padding:8px 10px;text-align:center}
+/* Inline "add your key" prompt shown in the same slot as .chat-compose
+   when none exists yet — mirrors the config screen's own key form. */
+.chat-key-setup{padding:12px 16px}
+.chat-key-setup .chat-empty-hint{padding:0 0 10px;text-align:left}
+.chat-key-setup-row{display:flex;gap:8px}
+.chat-key-link-btn{margin-bottom:0;font-size:15px;text-decoration:none}
+.chat-key-setup-row input{flex:1;min-width:0;padding:8px 10px;border:1px solid var(--grey);border-radius:6px;font-size:13px;font-family:inherit;box-sizing:border-box}
+.chat-key-setup-row .btn{flex:0 0 auto;font-size:12.5px;padding:8px 12px;white-space:nowrap}
 .chat-empty-hint{color:var(--muted);font-size:12.5px;padding:16px;text-align:center}
+.lightbox-reformat-row{margin-top:14px}
+.lightbox-reformat-row .btn{font-size:12.5px;padding:7px 14px}
+/* Clips via a fading mask rather than slicing the rendered HTML at a
+   character offset — the content can be raw markdown OR the AI-reformatted
+   version (see handleLightboxReformat re-applying this after a reformat
+   swap), and slicing HTML text directly risks cutting a tag in half. The
+   500/350-character rule (applyReadMoreClamp) only decides WHETHER to
+   clip, not where — the visual cutoff is a fixed max-height either way. */
+.lightbox-clamped{max-height:120px;overflow:hidden;-webkit-mask-image:linear-gradient(to bottom, black 65%, transparent 100%);mask-image:linear-gradient(to bottom, black 65%, transparent 100%)}
+.read-more-btn{display:block;margin-top:6px;font-size:12px;padding:5px 12px}
+.lightbox-chat-centered{flex:1;display:flex;align-items:center;justify-content:center}
+/* Grayscale variant of the exam's own KOMPETENZ/FRAGETYP info-box pattern
+   (.q-info-row/.q-info-box) — same 50/50 flex:1 split and layout, just
+   without the exam's blue accent, and each value clamped to 2 lines since
+   a CE name can run long and this needs to stay compact inside the
+   lightbox rather than the exam's full-width workarea. */
+.q-info-row-gray .q-info-box{background:#f2f3f5;border-color:var(--grey)}
+.q-info-row-gray .q-info-box .k{color:var(--muted)}
+.q-info-row-gray .q-info-box .v{color:var(--text);display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.k-compact, .v-compact{display:none}
+.lightbox-mobile-chat-btn, .lightbox-chat-back-btn, .lightbox-mobile-chat-hint, .lightbox-chat-stem{display:none}
 
 @media (max-width: 760px){
-  .lightbox-overlay{padding:0}
-  .lightbox{max-height:100vh;height:100%;border-radius:0}
+  /* A small gap around the panel (instead of true edge-to-edge) keeps it
+     reading as a closable overlay rather than just another full-page
+     screen — the dimmed backdrop stays visible framing it on all sides. */
+  .lightbox-overlay{padding:10px}
+  /* Sizes to actual content by default (height:auto, still capped by
+     max-height for long content) instead of always reserving full-viewport
+     height for a chat pane that's now a separate layer, not part of the
+     stacked flow — see .lightbox-chat-mode below, which restores full
+     height only while that layer is actually open. */
+  .lightbox{max-height:calc(100vh - 20px);height:auto;border-radius:10px}
+  .lightbox.lightbox-chat-mode{height:100%}
   .lightbox-body{grid-template-columns:1fr;overflow-y:auto;display:flex;flex-direction:column}
   .lightbox-content{overflow-y:visible}
-  .lightbox-chat{border-left:none;border-top:1px solid #eef1f5;min-height:360px}
+  /* Chat is hidden entirely by default here — reached via the floating
+     .lightbox-mobile-chat-btn instead of always being stacked below the
+     content — so a short question's lightbox doesn't have to reserve room
+     for it. When opened it becomes its own full layer over the whole
+     lightbox (position:absolute;inset:0), not just unhidden in place. */
+  .lightbox-chat{display:none;border-left:none;border-top:none}
+  .lightbox-chat.lightbox-chat-open{
+    display:flex;position:absolute;inset:0;z-index:5;
+    background:#fff;border-radius:10px;padding-top:6px;
+  }
+  .lightbox-chat-back-btn{
+    display:block;flex:0 0 auto;background:none;border:none;text-align:left;
+    color:var(--pm-blue-d);font-size:13px;font-weight:600;
+    padding:10px 16px;cursor:pointer;
+  }
+  /* Repeats the question at the top of the chat layer — it's covering the
+     content view entirely, so without this the question being chatted
+     about would be out of sight the whole time. */
+  /* Full text, no clamp/overflow-hidden — flex:0 0 auto just takes
+     whatever height the question actually needs and pushes the messages
+     below it, rather than risking truncating part of the question. */
+  .lightbox-chat-stem{
+    display:block;flex:0 0 auto;white-space:pre-wrap;
+    font-size:13px;font-weight:700;color:var(--text);
+    padding:0 16px 12px;border-bottom:1px solid #eef1f5;
+  }
+  /* A normal row in the content flow, not a floating overlay button —
+     keeps the mobile UI simpler (one less floating element to track). */
+  .lightbox-mobile-chat-btn{display:block;width:100%;margin-top:18px;font-size:13px;padding:10px 14px}
+  /* Shown INSTEAD of the floating chat button when there's nothing usable
+     behind it (no key/no stable ids) and no history worth revisiting —
+     see showMobileChatBtn in openQuestionLightbox. */
+  .lightbox-mobile-chat-hint{display:block;margin-top:18px}
+  /* Full "Kompetenz - Methoden & Technisches" / '04.05.11 "Chancen und
+     Risiken"' doesn't fit the narrow box here — compact to just
+     "Kompetenz" / "Chancen und Risiken" instead. */
+  .k-full, .v-full{display:none}
+  .k-compact, .v-compact{display:inline}
 }
 
 /* ---------- Mobile: collapse the question overview into a burger-toggled
@@ -1553,6 +1647,25 @@ function saveQuestionNote(qId, note){
   mem[qId] = entry;
   saveQuestionMemory(mem);
 }
+// Grows a note textarea to fit its content instead of scrolling internally
+// — every note/chat surface inside the lightbox is meant to avoid its own
+// independent scrollbar for as long as possible, so the lightbox panel
+// itself (or the page, for the navbar overlay) is the only thing that
+// ever scrolls, rather than several nested scroll islands. Only falls back
+// to a real internal scrollbar past the CSS max-height safety cap (an
+// extremely long note), so it never silently clips content.
+function autoGrowTextarea(el){
+  el.style.height = 'auto';
+  const maxHeightPx = parseFloat(getComputedStyle(el).maxHeight) || Infinity;
+  const needed = el.scrollHeight;
+  if(needed > maxHeightPx){
+    el.style.height = maxHeightPx + 'px';
+    el.style.overflowY = 'auto';
+  } else {
+    el.style.height = needed + 'px';
+    el.style.overflowY = 'hidden';
+  }
+}
 // Deliberately its own field, separate from both the real exam's answers
 // (session.answers — never touched here, no exam is running) and the study
 // notes above — a preview-link recipient's own first-pass, self-researched
@@ -2567,6 +2680,8 @@ function buildFazitPrompt(q, entry, history){
 let lightboxCurrentQid = null;
 function closeQuestionLightbox(){
   document.getElementById('question-lightbox').classList.add('hidden');
+  document.documentElement.classList.remove('lightbox-open');
+  document.body.classList.remove('lightbox-open');
   lightboxCurrentQid = null;
 }
 function openQuestionLightbox(qId){
@@ -2575,67 +2690,269 @@ function openQuestionLightbox(qId){
   lightboxCurrentQid = qId;
   const mem = ALL_Q.stableIds ? loadQuestionMemory() : {};
   const entry = mem[qId] || {};
+  const ke = keMap.get(q.keKey);
   const typeLabel = q.type==='mc' ? (q.multi ? 'Multiple Choice' : 'Single Choice') : 'Freitext';
 
   let answerHtml;
   if(q.type === 'mc'){
     answerHtml = q.options.map(o => `<div class="browse-opt${q.correct.has(o.letter)?' correct':''}"><strong>${o.letter})</strong> ${escapeHtml(o.text)}</div>`).join('');
   } else {
-    answerHtml = `<div class="rowval musterantwort">${renderMarkdownSafe(q.answer)}</div>`;
+    answerHtml = `<div class="rowval musterantwort" id="lightbox-answer-text">${renderMarkdownSafe(q.answer)}</div>`;
   }
   const infoHtml = hasUsefulInfo(q)
-    ? `<div class="rowlbl">Zusatzinfo</div><div class="rowval">${renderMarkdownSafe(q.info)}</div>` : '';
+    ? `<div class="rowlbl">Zusatzinfo</div><div class="rowval" id="lightbox-info-text">${renderMarkdownSafe(q.info)}</div>` : '';
   const noteHtml = ALL_Q.stableIds ? `
     <div class="rowlbl">Notizen</div>
     <textarea class="browse-note-input" id="lightbox-notes-input" placeholder="Eigene Notiz zu dieser Frage…">${escapeHtml(entry.note || '')}</textarea>` : '';
 
   const hasKey = !!getAiKey();
+  // Independent of ALL_Q.stableIds (unlike chat/notes) — reformatting reuses
+  // the same hash-keyed cache (REFORMAT_CACHE_PREFIX) the rest of the app
+  // already uses for the Musterlösung, not per-question-id storage, so it
+  // works even on a sheet without a stable ID column. Manual-only by
+  // design here (no auto-trigger like elsewhere in the app) so opening a
+  // lightbox never silently spends API quota on its own. It's a one-shot
+  // action per question — once every applicable field already has a cached
+  // reformat (from an earlier click, or from being revealed elsewhere in
+  // the app), there's nothing left to improve, so the button doesn't show.
+  // Always shown when applicable regardless of hasKey (same philosophy as
+  // the chat pane) — clicking it without a key redirects to the chat
+  // panel's own inline key setup instead of silently failing.
+  const canReformat = lightboxNeedsReformat(q);
+  const reformatBtnHtml = canReformat
+    ? `<div class="lightbox-reformat-row"><button type="button" class="btn btn-secondary" id="lightbox-reformat-btn">✨ Lesbarkeit verbessern</button></div>` : '';
+
+  // The chat pane is now ALWAYS the real chat shell (messages + compose
+  // row) whenever a question can even have chat history — never a bare
+  // "you need a key" placeholder — so its layout/format is obvious even to
+  // someone who hasn't set up a key yet. Without a key, the compose row
+  // becomes an inline "add your key" prompt instead of the message input;
+  // saving a valid key swaps it for the real input in place, no navigating
+  // to the config screen and no losing your spot in the chat.
+  const noKeyHintHtml = `<p class="chat-empty-hint">Für den Frage-Chat UND die verbesserte Lesbarkeit (Musterantwort/Zusatzinfo neu formatieren) wird ein Gemini API-Key benötigt.</p>`;
+  const chatComposeHtml = `<div class="chat-compose">
+      <textarea id="chat-input" placeholder="Frage zu diesem Thema stellen…"></textarea>
+      <div class="chat-compose-actions">
+        <button type="button" class="btn btn-primary" id="chat-send-btn">Senden</button>
+        <button type="button" class="btn btn-secondary" id="chat-fazit-btn">Chat-Fazit in Notiz übernehmen</button>
+      </div>
+    </div>`;
+  const chatKeySetupHtml = `<div class="chat-key-setup" id="chat-key-setup">
+      ${noKeyHintHtml}
+      <div class="chat-key-setup-row">
+        <input type="password" id="chat-key-input" placeholder="Google Gemini API-Key hier einfügen">
+        <a href="https://aistudio.google.com/api-keys" target="_blank" rel="noopener" class="icon-btn chat-key-link-btn" title="API-Key erstellen" aria-label="API-Key erstellen">🔑</a>
+        <button type="button" class="btn btn-primary" id="chat-key-save-btn">Speichern &amp; testen</button>
+      </div>
+      <div class="small-note" id="chat-key-status"></div>
+    </div>`;
   let chatPaneHtml;
   if(!ALL_Q.stableIds){
-    chatPaneHtml = `<p class="chat-empty-hint">Chat benötigt einen Fragenkatalog mit ID-Spalte.</p>`;
-  } else if(!hasKey){
-    chatPaneHtml = `<p class="chat-empty-hint">Für den Frage-Chat wird ein Gemini API-Key benötigt (siehe Konfigurationsseite).</p>`;
+    chatPaneHtml = `<div class="lightbox-chat-centered"><p class="chat-empty-hint">Chat benötigt einen Fragenkatalog mit ID-Spalte.</p></div>`;
   } else {
-    chatPaneHtml = `
-      <div class="chat-messages" id="chat-messages"></div>
-      <div class="chat-fazit-row"><button type="button" class="btn btn-secondary" id="chat-fazit-btn">Chat-Fazit in Notiz übernehmen</button></div>
-      <div class="chat-input-row">
-        <textarea id="chat-input" placeholder="Frage zu diesem Thema stellen…"></textarea>
-        <button type="button" class="btn btn-primary" id="chat-send-btn">Senden</button>
-      </div>`;
+    chatPaneHtml = `<div class="chat-messages" id="chat-messages"></div>${hasKey ? chatComposeHtml : chatKeySetupHtml}`;
   }
+  // On mobile the chat pane is only reachable via this row (see CSS/wiring
+  // below) — the pane above is always something worth opening once a sheet
+  // has stable ids (real chat, or at minimum the inline key-setup prompt),
+  // so the button shows whenever that's true; only the "no ID column at
+  // all" case still falls back to an inline hint instead. Desktop ignores
+  // this slot entirely, it always shows the chat pane inline regardless.
+  const showMobileChatBtn = ALL_Q.stableIds;
+  const mobileChatSlotHtml = showMobileChatBtn
+    ? `<button type="button" class="btn btn-secondary lightbox-mobile-chat-btn" id="lightbox-mobile-chat-btn">💬 Frage an KI stellen</button>`
+    : `<div class="lightbox-mobile-chat-hint"><p class="chat-empty-hint">Chat benötigt einen Fragenkatalog mit ID-Spalte.</p></div>`;
 
   const overlay = document.getElementById('question-lightbox');
   overlay.innerHTML = `<div class="lightbox">
     <button type="button" class="lightbox-close" id="lightbox-close-btn" aria-label="Schließen">&times;</button>
     <div class="lightbox-body">
       <div class="lightbox-content">
+        <div class="q-info-row q-info-row-gray">
+          <div class="q-info-box">
+            <div class="k"><span class="k-full">Kompetenz - ${escapeHtml(domainForKe(ke))}</span><span class="k-compact">Kompetenz</span></div>
+            <div class="v"><span class="v-full">${escapeHtml(keLabelQuoted(ke))}</span><span class="v-compact">${escapeHtml(ke.name)}</span></div>
+          </div>
+          <div class="q-info-box"><div class="k">Fragetyp</div><div class="v">${typeLabel}</div></div>
+        </div>
         <div class="stem browse-stem">${escapeHtml(q.stem)}</div>
-        <div class="rowlbl">Fragetyp</div>
-        <div class="rowval">${typeLabel}</div>
         <div class="rowlbl">${q.type==='mc' ? 'Antwortoptionen' : 'Musterantwort'}</div>
         ${answerHtml}
         ${infoHtml}
+        ${reformatBtnHtml}
         ${noteHtml}
+        ${mobileChatSlotHtml}
       </div>
-      <div class="lightbox-chat">${chatPaneHtml}</div>
+      <div class="lightbox-chat" id="lightbox-chat-pane">
+        <button type="button" class="lightbox-chat-back-btn" id="lightbox-chat-back-btn">&larr; Zurück</button>
+        <div class="lightbox-chat-stem">${escapeHtml(q.stem)}</div>
+        ${chatPaneHtml}
+      </div>
     </div>
   </div>`;
   overlay.classList.remove('hidden');
+  document.documentElement.classList.add('lightbox-open');
+  document.body.classList.add('lightbox-open');
 
   document.getElementById('lightbox-close-btn').addEventListener('click', closeQuestionLightbox);
   overlay.addEventListener('click', e => { if(e.target === overlay) closeQuestionLightbox(); });
+  // Mobile only (see CSS): chat is a whole separate layer over the content,
+  // reached via a floating button, rather than always stacked below it —
+  // this lets the lightbox itself size to the actual content's height
+  // instead of always reserving room for the chat pane too. Desktop is
+  // unaffected — .lightbox-chat is always visible there regardless of
+  // these classes. The button itself may not exist at all (see
+  // showMobileChatBtn above) when there's nothing usable behind it.
+  const lightboxEl = overlay.querySelector('.lightbox');
+  const chatPane = document.getElementById('lightbox-chat-pane');
+  const mobileChatBtn = document.getElementById('lightbox-mobile-chat-btn');
+  if(mobileChatBtn) mobileChatBtn.addEventListener('click', ()=>{
+    lightboxEl.classList.add('lightbox-chat-mode');
+    chatPane.classList.add('lightbox-chat-open');
+  });
+  document.getElementById('lightbox-chat-back-btn').addEventListener('click', ()=>{
+    lightboxEl.classList.remove('lightbox-chat-mode');
+    chatPane.classList.remove('lightbox-chat-open');
+  });
   const notesInput = document.getElementById('lightbox-notes-input');
-  if(notesInput) notesInput.addEventListener('change', ()=> saveQuestionNote(qId, notesInput.value));
-
-  if(ALL_Q.stableIds && hasKey){
-    renderChatMessages(loadQuestionChat(qId));
-    document.getElementById('chat-send-btn').addEventListener('click', ()=> handleChatSend(q));
-    document.getElementById('chat-input').addEventListener('keydown', e=>{
-      if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); handleChatSend(q); }
-    });
-    document.getElementById('chat-fazit-btn').addEventListener('click', ()=> handleChatFazit(q));
+  if(notesInput){
+    notesInput.addEventListener('change', ()=> saveQuestionNote(qId, notesInput.value));
+    notesInput.addEventListener('input', ()=> autoGrowTextarea(notesInput));
+    autoGrowTextarea(notesInput);
   }
+  const reformatBtn = document.getElementById('lightbox-reformat-btn');
+  if(reformatBtn){
+    if(hasKey){
+      reformatBtn.addEventListener('click', ()=> handleLightboxReformat(q, reformatBtn));
+    } else {
+      // No key yet — redirect to the chat panel's own inline key setup
+      // (the one place in this lightbox a key can actually be added)
+      // instead of a click that can't do anything.
+      reformatBtn.addEventListener('click', ()=>{
+        lightboxEl.classList.add('lightbox-chat-mode');
+        chatPane.classList.add('lightbox-chat-open');
+        const keyInput = document.getElementById('chat-key-input');
+        if(keyInput){ keyInput.focus(); keyInput.scrollIntoView({behavior:'smooth', block:'center'}); }
+      });
+    }
+  }
+  applyReadMoreClamps(q);
+
+  if(ALL_Q.stableIds){
+    renderChatMessages(loadQuestionChat(qId));
+    if(hasKey){
+      wireChatCompose(q);
+    } else {
+      wireChatKeySetup(q, qId);
+    }
+  }
+}
+function wireChatCompose(q){
+  document.getElementById('chat-send-btn').addEventListener('click', ()=> handleChatSend(q));
+  document.getElementById('chat-input').addEventListener('keydown', e=>{
+    if(e.key === 'Enter' && !e.shiftKey){ e.preventDefault(); handleChatSend(q); }
+  });
+  document.getElementById('chat-fazit-btn').addEventListener('click', ()=> handleChatFazit(q));
+}
+// Inline "add your key" prompt shown in place of the message compose row
+// when none exists yet — reuses testGeminiKey/AI_KEY_STORAGE exactly like
+// the config screen's own key form. On success, swaps itself for the real
+// compose row IN PLACE (rather than re-opening the whole lightbox) so a
+// mobile user doesn't get bounced out of the chat layer they were just
+// typing their key into.
+function wireChatKeySetup(q, qId){
+  const setupEl = document.getElementById('chat-key-setup');
+  const keyInput = document.getElementById('chat-key-input');
+  const statusEl = document.getElementById('chat-key-status');
+  const saveBtn = document.getElementById('chat-key-save-btn');
+  keyInput.addEventListener('keydown', e => { if(e.key === 'Enter'){ e.preventDefault(); saveBtn.click(); } });
+  saveBtn.addEventListener('click', async ()=>{
+    const key = keyInput.value.trim();
+    if(!key){
+      statusEl.textContent = 'Kein Key eingegeben.';
+      statusEl.className = 'small-note status-bad';
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Prüfe…';
+    statusEl.textContent = 'Key wird geprüft…';
+    statusEl.className = 'small-note';
+    const result = await testGeminiKey(key);
+    if(lightboxCurrentQid !== qId) return; // lightbox closed/switched while the request was in flight
+    if(result.ok){
+      localStorage.setItem(AI_KEY_STORAGE, key);
+      refreshAiKeyStatus(); // keeps the config screen's own badge/warning in sync
+      setupEl.outerHTML = `<div class="chat-compose">
+        <textarea id="chat-input" placeholder="Frage zu diesem Thema stellen…"></textarea>
+        <div class="chat-compose-actions">
+          <button type="button" class="btn btn-primary" id="chat-send-btn">Senden</button>
+          <button type="button" class="btn btn-secondary" id="chat-fazit-btn">Chat-Fazit in Notiz übernehmen</button>
+        </div>
+      </div>`;
+      wireChatCompose(q);
+      // The ✨ Lesbarkeit verbessern button was computed at open time based
+      // on the OLD no-key state — it won't retroactively appear here; the
+      // user needs to close and reopen the lightbox to see it, a known,
+      // accepted gap rather than something this swap also tries to fix.
+    } else {
+      statusEl.textContent = result.message || 'Key ungültig.';
+      statusEl.className = 'small-note status-bad';
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Speichern & testen';
+    }
+  });
+}
+// Threshold rule per the user's spec: 500 chars when only Musterantwort is
+// shown, 350 chars for EACH field once Zusatzinfo is also present (so the
+// two together don't dominate the lightbox). Re-run after a reformat swap
+// too (see handleLightboxReformat) since the AI-improved text can be a
+// different length than the original.
+// True if at least one applicable field (Musterantwort for open questions,
+// Zusatzinfo when present) doesn't already have a cached reformat. Shared
+// by openQuestionLightbox (initial button visibility) and
+// handleLightboxReformat (whether to keep showing the button once its
+// one-shot job is actually done).
+function lightboxNeedsReformat(q){
+  return (q.type === 'open' && !getCachedReformat(q.answer)) || (hasUsefulInfo(q) && !getCachedReformat(q.info));
+}
+function applyReadMoreClamps(q){
+  const threshold = hasUsefulInfo(q) ? 350 : 500;
+  if(q.type === 'open') applyReadMoreClamp(document.getElementById('lightbox-answer-text'), threshold);
+  if(hasUsefulInfo(q)) applyReadMoreClamp(document.getElementById('lightbox-info-text'), threshold);
+}
+// Removes any existing clamp + button for an element — used both to
+// re-apply cleanly (below) and to clear a stale button while a reformat is
+// loading (see handleLightboxReformat): the OLD text's clamp state says
+// nothing about whether the NEW (not-yet-arrived) text will also need one,
+// so the button must disappear during loading rather than sit there
+// possibly wrong until the reformat resolves.
+function clearReadMoreClamp(el){
+  if(!el) return;
+  const existingBtn = el.nextElementSibling;
+  if(existingBtn && existingBtn.classList.contains('read-more-btn')) existingBtn.remove();
+  el.classList.remove('lightbox-clamped');
+}
+// Clips via CSS (max-height + fade mask) rather than slicing the rendered
+// HTML at a character offset — content can be raw markdown or AI-
+// reformatted, and cutting an HTML string mid-tag would corrupt it. The
+// character count only decides WHETHER to clip; textContent (not innerHTML)
+// is measured so markup itself never counts toward the threshold.
+function applyReadMoreClamp(el, threshold){
+  if(!el) return;
+  clearReadMoreClamp(el);
+  if(el.textContent.length <= threshold) return;
+  el.classList.add('lightbox-clamped');
+  const btn = document.createElement('button');
+  btn.type = 'button';
+  btn.className = 'btn btn-secondary read-more-btn';
+  btn.textContent = 'Mehr anzeigen';
+  // Toggles both ways — the button stays put and just flips label/state
+  // each click, rather than expanding once and having no way back.
+  btn.addEventListener('click', ()=>{
+    const nowClamped = el.classList.toggle('lightbox-clamped');
+    btn.textContent = nowClamped ? 'Mehr anzeigen' : 'Weniger anzeigen';
+  });
+  el.insertAdjacentElement('afterend', btn);
 }
 function renderChatMessages(messages, statusText, errorText){
   const container = document.getElementById('chat-messages');
@@ -2688,14 +3005,59 @@ async function handleChatFazit(q){
     saveQuestionNote(q.id, appended);
     if(lightboxCurrentQid === q.id){
       const notesInput = document.getElementById('lightbox-notes-input');
-      if(notesInput) notesInput.value = appended;
+      if(notesInput){ notesInput.value = appended; autoGrowTextarea(notesInput); }
       btn.textContent = 'In Notiz übernommen ✓';
       setTimeout(()=>{ if(lightboxCurrentQid === q.id) btn.textContent = originalText; }, 2000);
+      // Switches back to the content/notes view — on mobile the chat is its
+      // own separate layer over the content (see the back button), so
+      // without this the just-imported note would be invisible behind it,
+      // defeating the point of importing it. No-op on desktop, where both
+      // are already visible side by side regardless of these classes.
+      document.querySelector('.lightbox')?.classList.remove('lightbox-chat-mode');
+      document.getElementById('lightbox-chat-pane')?.classList.remove('lightbox-chat-open');
     }
   } catch(err){
     if(lightboxCurrentQid === q.id) btn.textContent = 'Fehlgeschlagen — erneut versuchen';
   } finally {
     if(lightboxCurrentQid === q.id) btn.disabled = false;
+  }
+}
+// Manual-only (button click), unlike scheduleReformat's other call sites
+// elsewhere in the app which fire automatically on reveal — opening a
+// lightbox should never spend API quota on its own. Runs the Musterantwort
+// and Zusatzinfo reformats in parallel and reuses the SAME hash-keyed cache
+// (getCachedReformat/setCachedReformat) as the rest of the app, so
+// re-opening the same question (or seeing it again during a real exam)
+// doesn't re-call the API for text already reformatted once.
+async function handleLightboxReformat(q, btn){
+  btn.disabled = true;
+  const originalText = btn.textContent;
+  btn.textContent = 'Wird verbessert…';
+  const answerEl = document.getElementById('lightbox-answer-text');
+  const infoEl = document.getElementById('lightbox-info-text');
+  // Whether the OLD text needed a read-more says nothing about whether the
+  // NEW (not yet loaded) text will — clear both before the loading
+  // placeholder shows, rather than leaving a possibly-wrong button sitting
+  // there until the reformat resolves.
+  clearReadMoreClamp(answerEl);
+  clearReadMoreClamp(infoEl);
+  const tasks = [];
+  if(q.type === 'open' && answerEl) tasks.push(scheduleReformat(q.answer, answerEl, GEMINI_TIMEOUT_EXAM_MS));
+  if(infoEl) tasks.push(scheduleReformat(q.info, infoEl, GEMINI_TIMEOUT_EXAM_MS));
+  await Promise.all(tasks);
+  if(lightboxCurrentQid === q.id){
+    applyReadMoreClamps(q); // reformatted text can be a different length — re-check regardless of format state
+    // One-shot action — once every applicable field is actually reformatted
+    // (checked fresh, not assumed: a failed call falls back to the original
+    // text without caching, so this correctly stays visible to retry), the
+    // button has nothing left to do and disappears rather than sitting
+    // there uselessly re-clickable.
+    if(lightboxNeedsReformat(q)){
+      btn.disabled = false;
+      btn.textContent = originalText;
+    } else {
+      btn.closest('.lightbox-reformat-row')?.remove();
+    }
   }
 }
 
