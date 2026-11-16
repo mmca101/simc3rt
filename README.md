@@ -231,3 +231,5 @@ die zusätzliche Checkbox "Fortschritt auf Startseite anzeigen" (ebenfalls
 Standard: an) lässt er sich stattdessen prominent zwischen Konfigurator und
 Fußzeile auf der Startseite anzeigen, statt in der Karte versteckt zu sein —
 beide Checkboxen merken sich ihren Zustand geräteübergreifend.
+
+<i>Stand Nov 2026</i>
